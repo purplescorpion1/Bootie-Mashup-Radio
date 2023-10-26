@@ -1,0 +1,6 @@
+<html>
+<body>
+<p>This app will allow you to stream Bootie Mashup Radio</p>
+<p>Will work on any mobile or TV device running Android 8 or above</p>
+</body>
+</html>
