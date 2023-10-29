@@ -66,9 +66,11 @@ public class MainActivity extends Activity {
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.stop();
                 playbtn.setImageResource(R.drawable.play);
+                Toast.makeText(MainActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
             } else {
                 playbtn.setImageResource(R.drawable.pause);
                 PlaySong();
+                Toast.makeText(MainActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
             }
         }
         };
