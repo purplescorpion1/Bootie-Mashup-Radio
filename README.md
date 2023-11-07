@@ -3,7 +3,7 @@
 <p>This will work on any android device (mobile or TV) running android 8 or above</p>
 
 <h3>Note For AdBlock Users</h3>
-<p>If you are using an Adblocker and face issues with connection please whitelist the following addresses</p>
+<p>If you are using an AdBlocker and face issues with connection please whitelist the following addresses. (There are no ads in the app but some block list block github)</p>
 <p>purplescorpion1.github.io <br>
 c7.radioboss.fm</p>
 
