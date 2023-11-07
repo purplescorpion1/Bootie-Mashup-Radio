@@ -13,3 +13,7 @@ c7.radioboss.fm</p>
 
 <p>Android TV</p>
 <img src="fastlane/metadata/android/en-US/images/tvScreenshots/1.png" alt="drawing" width="500"/>
+
+<h3>Download The App</h3>
+<p>See
+<a href="https://github.com/purplescorpion1/BMRadio/releases)https://github.com/purplescorpion1/BMRadio/releases">Releases</a> </p>
