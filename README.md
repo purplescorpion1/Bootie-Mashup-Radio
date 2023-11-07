@@ -2,6 +2,11 @@
 
 <p>This will work on any android device (mobile or TV) running android 8 or above</p>
 
+<h3>Note For AdBlock Users</h3>
+<p>If you are using an Adblocker and face issues with connection please whitelist the following addresses</p>
+<p>purplescorpion1.github.io <br>
+c7.radioboss.fm</p>
+
 <h3>Screenshots</h3>
 <p>Android Mobile</p>
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" alt="drawing" width="200"/>
