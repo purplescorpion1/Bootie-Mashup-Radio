@@ -16,4 +16,4 @@ c7.radioboss.fm</p>
 
 <h3>Download The App</h3>
 <p>See
-<a href="https://github.com/purplescorpion1/BMRadio/releases)https://github.com/purplescorpion1/BMRadio/releases">Releases</a> </p>
+<a href="https://github.com/purplescorpion1/BMRadio/releases">Releases</a> </p>
