@@ -1,5 +1,4 @@
 package com.example.app;
-
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
@@ -9,26 +8,27 @@ import android.os.Looper;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.ImageView;
-import android.widget.SeekBar;
 import android.widget.Toast;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.view.View;
-import android.widget.Button;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 
 public class TvActivity extends Activity {
     boolean DoublePressToExit = false;
+    private boolean isMuted = false; // Initial mute state
+    private int previousVolume = -1; // To store the previous volume
+    private MediaSessionCompat mediaSession;
+    private AudioManager audioManager;
     Toast toast;
     // creating a variable for
     // button and media player
-    Button playBtn, pauseBtn;
 
     ImageView playbtn;
-    SeekBar seekBar;
+    ImageView btnMute;
 
     MediaPlayer mediaPlayer;
-
-    Runnable runnable;
 
     Handler handler;
 
@@ -51,6 +51,7 @@ public class TvActivity extends Activity {
         // mWebView.loadUrl("file:///android_asset/index.html");
 
         playbtn = findViewById(R.id.btnplay);
+        btnMute = findViewById(R.id.btnmute);
 
         playbtn.setOnClickListener(btnClickListen);
 
@@ -58,6 +59,55 @@ public class TvActivity extends Activity {
 
         handler = new Handler();
 
+        // Find your ImageView (btnmute) by its ID
+        ImageView btnMute = findViewById(R.id.btnmute);
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+
+        // Create a MediaSession
+        mediaSession = new MediaSessionCompat(this, "MuteAudio");
+
+        // Set up the media session's playback state
+        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
+                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE)
+                .build();
+        mediaSession.setPlaybackState(playbackState);
+
+        // Set a click listener for the Mute button
+        btnMute.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mediaPlayer.isPlaying()) {
+                    if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
+                        // Unmute audio
+                        audioManager.setStreamMute(AudioManager.STREAM_MUSIC, false);
+                        mediaSession.setActive(true);
+                        PlaybackStateCompat updatedPlaybackState = new PlaybackStateCompat.Builder()
+                                .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0.0f)
+                                .build();
+                        mediaSession.setPlaybackState(updatedPlaybackState);
+                        btnMute.setImageResource(R.drawable.mute_highlighted);
+                        Toast.makeText(TvActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+                    } else {
+                        // Mute audio
+                        audioManager.setStreamMute(AudioManager.STREAM_MUSIC, true);
+                        mediaSession.setActive(false);
+                        PlaybackStateCompat updatedPlaybackState = new PlaybackStateCompat.Builder()
+                                .setState(PlaybackStateCompat.STATE_PAUSED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0.0f)
+                                .build();
+                        mediaSession.setPlaybackState(updatedPlaybackState);
+                        btnMute.setImageResource(R.drawable.unmute_highlighted);
+                        Toast.makeText(TvActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }
+        });
+
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        mediaSession.release();
     }
 
     private View.OnClickListener btnClickListen = new View.OnClickListener() {
@@ -65,15 +115,16 @@ public class TvActivity extends Activity {
         public void onClick(View v) {
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.stop();
-                playbtn.setImageResource(R.drawable.play);
+                playbtn.setImageResource(R.drawable.play_highlighted);
                 Toast.makeText(TvActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
             } else {
-                playbtn.setImageResource(R.drawable.pause);
+                playbtn.setImageResource(R.drawable.pause_highlighted);
                 PlaySong();
                 Toast.makeText(TvActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
             }
         }
     };
+
 
     public void PlaySong(){
         Uri uri = Uri.parse("https://c7.radioboss.fm:18205/stream");

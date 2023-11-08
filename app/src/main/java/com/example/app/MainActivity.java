@@ -1,5 +1,4 @@
 package com.example.app;
-
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
@@ -9,26 +8,23 @@ import android.os.Looper;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.ImageView;
-import android.widget.SeekBar;
 import android.widget.Toast;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.view.View;
-import android.widget.Button;
 
 public class MainActivity extends Activity {
     boolean DoublePressToExit = false;
+    private boolean isMuted = false; // Initial mute state
+    private int previousVolume = -1; // To store the previous volume
     Toast toast;
     // creating a variable for
     // button and media player
-    Button playBtn, pauseBtn;
 
     ImageView playbtn;
-    SeekBar seekBar;
+    ImageView btnMute;
 
     MediaPlayer mediaPlayer;
-
-    Runnable runnable;
 
     Handler handler;
 
@@ -51,6 +47,7 @@ public class MainActivity extends Activity {
         // mWebView.loadUrl("file:///android_asset/index.html");
 
         playbtn = findViewById(R.id.btnplay);
+        btnMute = findViewById(R.id.btnmute);
 
         playbtn.setOnClickListener(btnClickListen);
 
@@ -58,7 +55,19 @@ public class MainActivity extends Activity {
 
         handler = new Handler();
 
+        // Find your ImageView (btnmute) by its ID
+        ImageView btnMute = findViewById(R.id.btnmute);
+
+        // Set an OnClickListener for the ImageView
+        btnMute.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleMute(); // Toggle mute state when the image is clicked
+            }
+        });
+
     }
+
 
     private View.OnClickListener btnClickListen = new View.OnClickListener() {
         @Override
@@ -73,7 +82,30 @@ public class MainActivity extends Activity {
                 Toast.makeText(MainActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
             }
         }
-        };
+    };
+
+    private void toggleMute() {
+        if (mediaPlayer.isPlaying()) {
+            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+
+            if (isMuted) {
+                // Unmute the app and restore the previous volume
+                if (previousVolume != -1) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, previousVolume, 0);
+                }
+                isMuted = false;
+                btnMute.setImageResource(R.drawable.mute);
+                Toast.makeText(MainActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+            } else {
+                // Mute the app and store the previous volume
+                previousVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
+                isMuted = true;
+                btnMute.setImageResource(R.drawable.unmute);
+                Toast.makeText(MainActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
 
     public void PlaySong(){
         Uri uri = Uri.parse("https://c7.radioboss.fm:18205/stream");
