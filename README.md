@@ -12,7 +12,7 @@ c7.radioboss.fm</p>
 <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" alt="drawing" width="200"/>
 
 <p>Android TV</p>
-<img src="fastlane/metadata/android/en-US/images/tvScreenshots/1.png" alt="drawing" width="500"/>
+<img src="fastlane/metadata/android/en-US/images/tvScreenshots/2.png" alt="drawing" width="500"/>
 
 <h3>Download The App</h3>
 <p>See
