@@ -62,8 +62,6 @@ public class TvActivity extends Activity {
 
         playbtn.setOnClickListener(btnClickListen);
 
-        mediaPlayer = new MediaPlayer();
-
         handler = new Handler();
 
         // Find your ImageView (btnmute) by its ID
