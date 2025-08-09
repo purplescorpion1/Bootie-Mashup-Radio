@@ -24,6 +24,7 @@ public class MediaPlaybackService extends Service {
     private static final String CHANNEL_ID = "media_playback_channel";
 
     private MediaPlayer mediaPlayer;
+    private boolean isPreparing = false;
     private final IBinder binder = new LocalBinder();
 
     public class LocalBinder extends Binder {
@@ -41,6 +42,7 @@ public class MediaPlaybackService extends Service {
         mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mp) {
+                isPreparing = false;
                 mp.start();
                 startForeground(NOTIFICATION_ID, buildNotification("Playing", null));
             }
@@ -114,13 +116,16 @@ public class MediaPlaybackService extends Service {
     }
 
     public void play() {
-        if (!mediaPlayer.isPlaying()) {
+        if (!mediaPlayer.isPlaying() && !isPreparing) {
+            isPreparing = true;
             Uri uri = Uri.parse("https://c7.radioboss.fm:18205/stream");
             try {
+                mediaPlayer.reset();
                 mediaPlayer.setDataSource(this, uri);
                 mediaPlayer.prepareAsync();
             } catch (Exception e) {
                 e.printStackTrace();
+                isPreparing = false;
             }
         }
     }
