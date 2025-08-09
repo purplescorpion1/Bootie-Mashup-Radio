@@ -2,6 +2,7 @@ package com.example.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -101,6 +102,12 @@ public class TvActivity extends Activity {
 
         Intent intent = new Intent(this, MediaPlaybackService.class);
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+            }
+        }
     }
 
     @Override
