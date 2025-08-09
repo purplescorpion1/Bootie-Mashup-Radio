@@ -22,4 +22,15 @@ class MyWebViewClient extends WebViewClient {
         view.getContext().startActivity(intent);
         return true;
     }
+
+    @Override
+    public void onPageFinished(WebView view, String url) {
+        super.onPageFinished(view, url);
+        view.loadUrl(
+                "javascript:(function() { " +
+                        "var title = document.getElementById('track-title').innerText;" +
+                        "var imageUrl = document.getElementById('track-image').src;" +
+                        "Android.updateTrackInfo(title, imageUrl);" +
+                        "})()");
+    }
 }
