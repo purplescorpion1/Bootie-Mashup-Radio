@@ -39,6 +39,7 @@ public class MediaPlaybackService extends Service {
         super.onCreate();
         createNotificationChannel();
         mediaSession = new MediaSessionCompat(this, "MediaPlaybackService");
+        mediaSession.setMediaButtonReceiver(null);
         mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
         mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
