@@ -25,6 +25,7 @@ public class MediaPlaybackService extends Service {
 
     private MediaPlayer mediaPlayer;
     private boolean isPreparing = false;
+    private MediaSessionCompat mediaSession;
     private final IBinder binder = new LocalBinder();
 
     public class LocalBinder extends Binder {
@@ -37,6 +38,7 @@ public class MediaPlaybackService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+        mediaSession = new MediaSessionCompat(this, "MediaPlaybackService");
         mediaPlayer = new MediaPlayer();
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
         mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
@@ -79,7 +81,7 @@ public class MediaPlaybackService extends Service {
                 .addAction(R.drawable.ic_mute, "Mute", mutePendingIntent)
                 .setStyle(new MediaStyle()
                         .setShowActionsInCompactView(0, 1)
-                        .setMediaSession(new MediaSessionCompat(this, "MediaSession").getSessionToken()))
+                        .setMediaSession(mediaSession.getSessionToken()))
                 .setPriority(NotificationCompat.PRIORITY_LOW);
 
         return builder.build();
@@ -112,6 +114,7 @@ public class MediaPlaybackService extends Service {
             mediaPlayer.release();
             mediaPlayer = null;
         }
+        mediaSession.release();
         super.onDestroy();
     }
 
