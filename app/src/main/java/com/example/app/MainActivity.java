@@ -2,6 +2,7 @@ package com.example.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -13,10 +14,15 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.view.View;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.IBinder;
+
 public class MainActivity extends Activity {
     boolean DoublePressToExit = false;
     private boolean isMuted = false; // Initial mute state
-    private int previousVolume = -1; // To store the previous volume
     Toast toast;
     // creating a variable for
     // button and media player
@@ -24,9 +30,25 @@ public class MainActivity extends Activity {
     ImageView playbtn;
     ImageView btnMute;
 
-    MediaPlayer mediaPlayer;
+    private MediaPlaybackService mediaPlaybackService;
+    private boolean isBound = false;
 
     Handler handler;
+    private final Handler trackInfoHandler = new Handler(Looper.getMainLooper());
+    private final Runnable trackInfoRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (mWebView != null) {
+                mWebView.loadUrl(
+                        "javascript:(function() { " +
+                                "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
+                                "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
+                                "Android.updateTrackInfo(title, imageUrl);" +
+                                "})()");
+            }
+            trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
+        }
+    };
 
     private WebView mWebView;
 
@@ -39,6 +61,7 @@ public class MainActivity extends Activity {
         WebSettings webSettings = mWebView.getSettings();
         webSettings.setJavaScriptEnabled(true);
         mWebView.setWebViewClient(new MyWebViewClient());
+        mWebView.addJavascriptInterface(new WebAppInterface(this), "Android");
 
         // REMOTE RESOURCE
         mWebView.loadUrl("https://purplescorpion1.github.io/");
@@ -50,8 +73,6 @@ public class MainActivity extends Activity {
         btnMute = findViewById(R.id.btnmute);
 
         playbtn.setOnClickListener(btnClickListen);
-
-        mediaPlayer = new MediaPlayer();
 
         handler = new Handler();
 
@@ -66,40 +87,69 @@ public class MainActivity extends Activity {
             }
         });
 
+        Intent intent = new Intent(this, MediaPlaybackService.class);
+        startService(intent);
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+            }
+        }
+        trackInfoHandler.post(trackInfoRunnable);
     }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (isBound) {
+            unbindService(serviceConnection);
+            isBound = false;
+        }
+        trackInfoHandler.removeCallbacks(trackInfoRunnable);
+    }
+
+    private ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
+            mediaPlaybackService = binder.getService();
+            isBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            isBound = false;
+        }
+    };
 
 
     private View.OnClickListener btnClickListen = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.stop();
-                playbtn.setImageResource(R.drawable.play);
-                Toast.makeText(MainActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
-            } else {
-                playbtn.setImageResource(R.drawable.pause);
-                PlaySong();
-                Toast.makeText(MainActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
+            if (isBound) {
+                if (mediaPlaybackService.isPlaying()) {
+                    mediaPlaybackService.stop();
+                    playbtn.setImageResource(R.drawable.play);
+                    Toast.makeText(MainActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
+                } else {
+                    mediaPlaybackService.play();
+                    playbtn.setImageResource(R.drawable.pause);
+                    Toast.makeText(MainActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
+                }
             }
         }
     };
 
     private void toggleMute() {
-        if (mediaPlayer.isPlaying()) {
-            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-
+        if (isBound && mediaPlaybackService.isPlaying()) {
             if (isMuted) {
-                // Unmute the app and restore the previous volume
-                if (previousVolume != -1) {
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, previousVolume, 0);
-                }
+                mediaPlaybackService.unmute();
                 isMuted = false;
                 btnMute.setImageResource(R.drawable.mute);
                 Toast.makeText(MainActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
             } else {
-                // Mute the app and store the previous volume
-                previousVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
+                mediaPlaybackService.mute();
                 isMuted = true;
                 btnMute.setImageResource(R.drawable.unmute);
                 Toast.makeText(MainActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
@@ -107,40 +157,19 @@ public class MainActivity extends Activity {
         }
     }
 
-    public void PlaySong(){
-        Uri uri = Uri.parse("https://c7.radioboss.fm:18205/stream");
-        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        mediaPlayer.reset();
-
-        try {
-            mediaPlayer.setDataSource(MainActivity.this, uri);
-        }catch (Exception e){e.printStackTrace();}
-
-        mediaPlayer.prepareAsync();
-        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-            @Override
-            public void onPrepared(MediaPlayer mp) {
-                mediaPlayer.start();
-            }
-        });
-
-        mediaPlayer.setOnBufferingUpdateListener(new MediaPlayer.OnBufferingUpdateListener() {
-            @Override
-            public void onBufferingUpdate(MediaPlayer mp, int percent) {
-
-            }
-        });
-
-    }
-
     @Override
     public void onBackPressed() {
         if (DoublePressToExit){
-            finishAffinity();
-            toast.cancel();
+            Intent intent = new Intent(this, MediaPlaybackService.class);
+            stopService(intent);
+            finish();
+            if (toast != null) {
+                toast.cancel();
+            }
         }else {
             DoublePressToExit=true;
-            Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT).show();
+            toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
+            toast.show();
             Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable() {
                 @Override
@@ -151,4 +180,55 @@ public class MainActivity extends Activity {
         }
     }
 
+    public class WebAppInterface {
+        Context mContext;
+        private String lastTitle = "";
+        private String lastImageUrl = "";
+
+        WebAppInterface(Context c) {
+            mContext = c;
+        }
+
+        @android.webkit.JavascriptInterface
+        public void showToast(String toast) {
+            Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show();
+        }
+
+        @android.webkit.JavascriptInterface
+        public void updateTrackInfo(String title, String imageUrl) {
+            if (title != null && imageUrl != null && (!title.equals(lastTitle) || !imageUrl.equals(lastImageUrl))) {
+                lastTitle = title;
+                lastImageUrl = imageUrl;
+                if (isBound) {
+                    new DownloadImageTask().execute(imageUrl, title);
+                }
+            }
+        }
+    }
+
+    private class DownloadImageTask extends android.os.AsyncTask<String, Void, android.graphics.Bitmap> {
+        private String title;
+
+        @Override
+        protected android.graphics.Bitmap doInBackground(String... urls) {
+            String imageUrl = urls[0];
+            title = urls[1];
+            android.graphics.Bitmap bitmap = null;
+            try {
+                java.io.InputStream in = new java.net.URL(imageUrl).openStream();
+                bitmap = android.graphics.BitmapFactory.decodeStream(in);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return bitmap;
+        }
+
+        @Override
+        protected void onPostExecute(android.graphics.Bitmap result) {
+            if (isBound) {
+                mediaPlaybackService.updateNotification(title, result);
+                mediaPlaybackService.updateMetadata(title, result);
+            }
+        }
+    }
 }

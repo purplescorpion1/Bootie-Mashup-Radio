@@ -2,6 +2,7 @@ package com.example.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,11 +16,15 @@ import android.view.View;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.IBinder;
+
 public class TvActivity extends Activity {
     boolean DoublePressToExit = false;
     private boolean isMuted = false; // Initial mute state
-    private int previousVolume = -1; // To store the previous volume
-    private MediaSessionCompat mediaSession;
     private AudioManager audioManager;
     Toast toast;
     // creating a variable for
@@ -28,9 +33,25 @@ public class TvActivity extends Activity {
     ImageView playbtn;
     ImageView btnMute;
 
-    MediaPlayer mediaPlayer;
+    private MediaPlaybackService mediaPlaybackService;
+    private boolean isBound = false;
 
     Handler handler;
+    private final Handler trackInfoHandler = new Handler(Looper.getMainLooper());
+    private final Runnable trackInfoRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (mWebView != null) {
+                mWebView.loadUrl(
+                        "javascript:(function() { " +
+                                "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
+                                "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
+                                "Android.updateTrackInfo(title, imageUrl);" +
+                                "})()");
+            }
+            trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
+        }
+    };
 
     private WebView mWebView;
 
@@ -43,6 +64,7 @@ public class TvActivity extends Activity {
         WebSettings webSettings = mWebView.getSettings();
         webSettings.setJavaScriptEnabled(true);
         mWebView.setWebViewClient(new MyWebViewClient());
+        mWebView.addJavascriptInterface(new WebAppInterface(this), "Android");
 
         // REMOTE RESOURCE
         mWebView.loadUrl("https://purplescorpion1.github.io/");
@@ -55,46 +77,25 @@ public class TvActivity extends Activity {
 
         playbtn.setOnClickListener(btnClickListen);
 
-        mediaPlayer = new MediaPlayer();
-
         handler = new Handler();
 
         // Find your ImageView (btnmute) by its ID
         ImageView btnMute = findViewById(R.id.btnmute);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
-        // Create a MediaSession
-        mediaSession = new MediaSessionCompat(this, "MuteAudio");
-
-        // Set up the media session's playback state
-        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
-                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE)
-                .build();
-        mediaSession.setPlaybackState(playbackState);
-
         // Set a click listener for the Mute button
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mediaPlayer.isPlaying()) {
-                    if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)) {
-                        // Unmute audio
-                        audioManager.setStreamMute(AudioManager.STREAM_MUSIC, false);
-                        mediaSession.setActive(true);
-                        PlaybackStateCompat updatedPlaybackState = new PlaybackStateCompat.Builder()
-                                .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0.0f)
-                                .build();
-                        mediaSession.setPlaybackState(updatedPlaybackState);
+                if (isBound && mediaPlaybackService.isPlaying()) {
+                    if (isMuted) {
+                        mediaPlaybackService.unmute();
+                        isMuted = false;
                         btnMute.setImageResource(R.drawable.mute_highlighted);
                         Toast.makeText(TvActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
                     } else {
-                        // Mute audio
-                        audioManager.setStreamMute(AudioManager.STREAM_MUSIC, true);
-                        mediaSession.setActive(false);
-                        PlaybackStateCompat updatedPlaybackState = new PlaybackStateCompat.Builder()
-                                .setState(PlaybackStateCompat.STATE_PAUSED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0.0f)
-                                .build();
-                        mediaSession.setPlaybackState(updatedPlaybackState);
+                        mediaPlaybackService.mute();
+                        isMuted = true;
                         btnMute.setImageResource(R.drawable.unmute_highlighted);
                         Toast.makeText(TvActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
                     }
@@ -102,64 +103,72 @@ public class TvActivity extends Activity {
             }
         });
 
+        Intent intent = new Intent(this, MediaPlaybackService.class);
+        startService(intent);
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+            }
+        }
+        trackInfoHandler.post(trackInfoRunnable);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        mediaSession.release();
+        if (isBound) {
+            unbindService(serviceConnection);
+            isBound = false;
+        }
+        trackInfoHandler.removeCallbacks(trackInfoRunnable);
     }
+
+    private ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
+            mediaPlaybackService = binder.getService();
+            isBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            isBound = false;
+        }
+    };
 
     private View.OnClickListener btnClickListen = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.stop();
-                playbtn.setImageResource(R.drawable.play_highlighted);
-                Toast.makeText(TvActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
-            } else {
-                playbtn.setImageResource(R.drawable.pause_highlighted);
-                PlaySong();
-                Toast.makeText(TvActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
+            if (isBound) {
+                if (mediaPlaybackService.isPlaying()) {
+                    mediaPlaybackService.stop();
+                    playbtn.setImageResource(R.drawable.play_highlighted);
+                    Toast.makeText(TvActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
+                } else {
+                    mediaPlaybackService.play();
+                    playbtn.setImageResource(R.drawable.pause_highlighted);
+                    Toast.makeText(TvActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
+                }
             }
         }
     };
 
-
-    public void PlaySong(){
-        Uri uri = Uri.parse("https://c7.radioboss.fm:18205/stream");
-        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        mediaPlayer.reset();
-
-        try {
-            mediaPlayer.setDataSource(TvActivity.this, uri);
-        }catch (Exception e){e.printStackTrace();}
-
-        mediaPlayer.prepareAsync();
-        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-            @Override
-            public void onPrepared(MediaPlayer mp) {
-                mediaPlayer.start();
-            }
-        });
-
-        mediaPlayer.setOnBufferingUpdateListener(new MediaPlayer.OnBufferingUpdateListener() {
-            @Override
-            public void onBufferingUpdate(MediaPlayer mp, int percent) {
-
-            }
-        });
-
-    }
-
     @Override
     public void onBackPressed() {
         if (DoublePressToExit){
-            finishAffinity();
-            toast.cancel();
+            Intent intent = new Intent(this, MediaPlaybackService.class);
+            stopService(intent);
+            finish();
+            if (toast != null) {
+                toast.cancel();
+            }
         }else {
             DoublePressToExit=true;
-            Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT).show();
+            toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
+            toast.show();
             Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable() {
                 @Override
@@ -170,4 +179,55 @@ public class TvActivity extends Activity {
         }
     }
 
+    public class WebAppInterface {
+        Context mContext;
+        private String lastTitle = "";
+        private String lastImageUrl = "";
+
+        WebAppInterface(Context c) {
+            mContext = c;
+        }
+
+        @android.webkit.JavascriptInterface
+        public void showToast(String toast) {
+            Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show();
+        }
+
+        @android.webkit.JavascriptInterface
+        public void updateTrackInfo(String title, String imageUrl) {
+            if (title != null && imageUrl != null && (!title.equals(lastTitle) || !imageUrl.equals(lastImageUrl))) {
+                lastTitle = title;
+                lastImageUrl = imageUrl;
+                if (isBound) {
+                    new DownloadImageTask().execute(imageUrl, title);
+                }
+            }
+        }
+    }
+
+    private class DownloadImageTask extends android.os.AsyncTask<String, Void, android.graphics.Bitmap> {
+        private String title;
+
+        @Override
+        protected android.graphics.Bitmap doInBackground(String... urls) {
+            String imageUrl = urls[0];
+            title = urls[1];
+            android.graphics.Bitmap bitmap = null;
+            try {
+                java.io.InputStream in = new java.net.URL(imageUrl).openStream();
+                bitmap = android.graphics.BitmapFactory.decodeStream(in);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return bitmap;
+        }
+
+        @Override
+        protected void onPostExecute(android.graphics.Bitmap result) {
+            if (isBound) {
+                mediaPlaybackService.updateNotification(title, result);
+                mediaPlaybackService.updateMetadata(title, result);
+            }
+        }
+    }
 }

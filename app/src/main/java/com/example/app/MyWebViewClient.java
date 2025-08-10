@@ -22,4 +22,15 @@ class MyWebViewClient extends WebViewClient {
         view.getContext().startActivity(intent);
         return true;
     }
+
+    @Override
+    public void onPageFinished(WebView view, String url) {
+        super.onPageFinished(view, url);
+        view.loadUrl(
+                "javascript:(function() { " +
+                        "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
+                        "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
+                        "Android.updateTrackInfo(title, imageUrl);" +
+                        "})()");
+    }
 }
