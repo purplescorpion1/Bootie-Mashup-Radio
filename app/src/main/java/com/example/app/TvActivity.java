@@ -37,6 +37,21 @@ public class TvActivity extends Activity {
     private boolean isBound = false;
 
     Handler handler;
+    private final Handler trackInfoHandler = new Handler(Looper.getMainLooper());
+    private final Runnable trackInfoRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (mWebView != null) {
+                mWebView.loadUrl(
+                        "javascript:(function() { " +
+                                "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
+                                "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
+                                "Android.updateTrackInfo(title, imageUrl);" +
+                                "})()");
+            }
+            trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
+        }
+    };
 
     private WebView mWebView;
 
@@ -89,6 +104,7 @@ public class TvActivity extends Activity {
         });
 
         Intent intent = new Intent(this, MediaPlaybackService.class);
+        startService(intent);
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -96,6 +112,7 @@ public class TvActivity extends Activity {
                 requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
             }
         }
+        trackInfoHandler.post(trackInfoRunnable);
     }
 
     @Override
@@ -105,6 +122,7 @@ public class TvActivity extends Activity {
             unbindService(serviceConnection);
             isBound = false;
         }
+        trackInfoHandler.removeCallbacks(trackInfoRunnable);
     }
 
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -163,6 +181,8 @@ public class TvActivity extends Activity {
 
     public class WebAppInterface {
         Context mContext;
+        private String lastTitle = "";
+        private String lastImageUrl = "";
 
         WebAppInterface(Context c) {
             mContext = c;
@@ -175,8 +195,12 @@ public class TvActivity extends Activity {
 
         @android.webkit.JavascriptInterface
         public void updateTrackInfo(String title, String imageUrl) {
-            if (isBound) {
-                new DownloadImageTask().execute(imageUrl, title);
+            if (title != null && imageUrl != null && (!title.equals(lastTitle) || !imageUrl.equals(lastImageUrl))) {
+                lastTitle = title;
+                lastImageUrl = imageUrl;
+                if (isBound) {
+                    new DownloadImageTask().execute(imageUrl, title);
+                }
             }
         }
     }
