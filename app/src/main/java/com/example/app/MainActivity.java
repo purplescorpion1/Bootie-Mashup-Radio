@@ -34,21 +34,6 @@ public class MainActivity extends Activity {
     private boolean isBound = false;
 
     Handler handler;
-    private final Handler trackInfoHandler = new Handler(Looper.getMainLooper());
-    private final Runnable trackInfoRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (mWebView != null) {
-                mWebView.loadUrl(
-                        "javascript:(function() { " +
-                                "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
-                                "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
-                                "Android.updateTrackInfo(title, imageUrl);" +
-                                "})()");
-            }
-            trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
-        }
-    };
 
     private WebView mWebView;
 
@@ -61,8 +46,6 @@ public class MainActivity extends Activity {
         WebSettings webSettings = mWebView.getSettings();
         webSettings.setJavaScriptEnabled(true);
         mWebView.setWebViewClient(new MyWebViewClient());
-        mWebView.addJavascriptInterface(new WebAppInterface(this), "Android");
-
         // REMOTE RESOURCE
         mWebView.loadUrl("https://purplescorpion1.github.io/");
 
@@ -96,7 +79,6 @@ public class MainActivity extends Activity {
                 requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
             }
         }
-        trackInfoHandler.post(trackInfoRunnable);
     }
 
     @Override
@@ -106,7 +88,6 @@ public class MainActivity extends Activity {
             unbindService(serviceConnection);
             isBound = false;
         }
-        trackInfoHandler.removeCallbacks(trackInfoRunnable);
     }
 
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -180,55 +161,4 @@ public class MainActivity extends Activity {
         }
     }
 
-    public class WebAppInterface {
-        Context mContext;
-        private String lastTitle = "";
-        private String lastImageUrl = "";
-
-        WebAppInterface(Context c) {
-            mContext = c;
-        }
-
-        @android.webkit.JavascriptInterface
-        public void showToast(String toast) {
-            Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show();
-        }
-
-        @android.webkit.JavascriptInterface
-        public void updateTrackInfo(String title, String imageUrl) {
-            if (title != null && imageUrl != null && (!title.equals(lastTitle) || !imageUrl.equals(lastImageUrl))) {
-                lastTitle = title;
-                lastImageUrl = imageUrl;
-                if (isBound) {
-                    new DownloadImageTask().execute(imageUrl, title);
-                }
-            }
-        }
-    }
-
-    private class DownloadImageTask extends android.os.AsyncTask<String, Void, android.graphics.Bitmap> {
-        private String title;
-
-        @Override
-        protected android.graphics.Bitmap doInBackground(String... urls) {
-            String imageUrl = urls[0];
-            title = urls[1];
-            android.graphics.Bitmap bitmap = null;
-            try {
-                java.io.InputStream in = new java.net.URL(imageUrl).openStream();
-                bitmap = android.graphics.BitmapFactory.decodeStream(in);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            return bitmap;
-        }
-
-        @Override
-        protected void onPostExecute(android.graphics.Bitmap result) {
-            if (isBound) {
-                mediaPlaybackService.updateNotification(title, result);
-                mediaPlaybackService.updateMetadata(title, result);
-            }
-        }
-    }
 }
