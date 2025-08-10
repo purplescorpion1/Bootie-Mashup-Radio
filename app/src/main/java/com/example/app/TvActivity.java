@@ -25,7 +25,6 @@ import android.os.IBinder;
 public class TvActivity extends Activity {
     boolean DoublePressToExit = false;
     private boolean isMuted = false; // Initial mute state
-    private MediaSessionCompat mediaSession;
     private AudioManager audioManager;
     Toast toast;
     // creating a variable for
@@ -69,15 +68,6 @@ public class TvActivity extends Activity {
         ImageView btnMute = findViewById(R.id.btnmute);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
-        // Create a MediaSession
-        mediaSession = new MediaSessionCompat(this, "MuteAudio");
-
-        // Set up the media session's playback state
-        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
-                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE)
-                .build();
-        mediaSession.setPlaybackState(playbackState);
-
         // Set a click listener for the Mute button
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -88,13 +78,11 @@ public class TvActivity extends Activity {
                         isMuted = false;
                         btnMute.setImageResource(R.drawable.mute_highlighted);
                         Toast.makeText(TvActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
-                        mediaSession.setActive(true);
                     } else {
                         mediaPlaybackService.mute();
                         isMuted = true;
                         btnMute.setImageResource(R.drawable.unmute_highlighted);
                         Toast.makeText(TvActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
-                        mediaSession.setActive(false);
                     }
                 }
             }
@@ -113,7 +101,6 @@ public class TvActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        mediaSession.release();
         if (isBound) {
             unbindService(serviceConnection);
             isBound = false;
@@ -142,13 +129,10 @@ public class TvActivity extends Activity {
                     mediaPlaybackService.stop();
                     playbtn.setImageResource(R.drawable.play_highlighted);
                     Toast.makeText(TvActivity.this, "Audio has been paused", Toast.LENGTH_SHORT).show();
-                    updatePlaybackState(PlaybackStateCompat.STATE_PAUSED);
                 } else {
                     mediaPlaybackService.play();
                     playbtn.setImageResource(R.drawable.pause_highlighted);
                     Toast.makeText(TvActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
-                    updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
-                    mediaSession.setActive(true);
                 }
             }
         }
@@ -157,8 +141,12 @@ public class TvActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (DoublePressToExit){
+            Intent intent = new Intent(this, MediaPlaybackService.class);
+            stopService(intent);
             finish();
-            toast.cancel();
+            if (toast != null) {
+                toast.cancel();
+            }
         }else {
             DoublePressToExit=true;
             toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
@@ -214,22 +202,8 @@ public class TvActivity extends Activity {
         protected void onPostExecute(android.graphics.Bitmap result) {
             if (isBound) {
                 mediaPlaybackService.updateNotification(title, result);
-                updateMediaSession(title, result);
+                mediaPlaybackService.updateMetadata(title, result);
             }
         }
-    }
-
-    private void updateMediaSession(String title, android.graphics.Bitmap artwork) {
-        android.support.v4.media.MediaMetadataCompat.Builder metadataBuilder = new android.support.v4.media.MediaMetadataCompat.Builder();
-        metadataBuilder.putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE, title);
-        metadataBuilder.putBitmap(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ART, artwork);
-        mediaSession.setMetadata(metadataBuilder.build());
-    }
-
-    private void updatePlaybackState(int state) {
-        PlaybackStateCompat.Builder playbackStateBuilder = new PlaybackStateCompat.Builder();
-        playbackStateBuilder.setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE);
-        playbackStateBuilder.setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0);
-        mediaSession.setPlaybackState(playbackStateBuilder.build());
     }
 }

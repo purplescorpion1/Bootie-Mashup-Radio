@@ -142,8 +142,12 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (DoublePressToExit){
+            Intent intent = new Intent(this, MediaPlaybackService.class);
+            stopService(intent);
             finish();
-            toast.cancel();
+            if (toast != null) {
+                toast.cancel();
+            }
         }else {
             DoublePressToExit=true;
             toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
@@ -199,6 +203,7 @@ public class MainActivity extends Activity {
         protected void onPostExecute(android.graphics.Bitmap result) {
             if (isBound) {
                 mediaPlaybackService.updateNotification(title, result);
+                mediaPlaybackService.updateMetadata(title, result);
             }
         }
     }

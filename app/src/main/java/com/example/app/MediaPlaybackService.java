@@ -155,6 +155,8 @@ public class MediaPlaybackService extends Service {
                 mediaPlayer.reset();
                 mediaPlayer.setDataSource(this, uri);
                 mediaPlayer.prepareAsync();
+                mediaSession.setActive(true);
+                updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
             } catch (Exception e) {
                 e.printStackTrace();
                 isPreparing = false;
@@ -167,6 +169,8 @@ public class MediaPlaybackService extends Service {
             mediaPlayer.stop();
             mediaPlayer.reset();
             updateNotification();
+            mediaSession.setActive(false);
+            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED);
         }
     }
 
@@ -175,6 +179,8 @@ public class MediaPlaybackService extends Service {
             mediaPlayer.stop();
             mediaPlayer.reset();
             updateNotification();
+            mediaSession.setActive(false);
+            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED);
         }
     }
 
@@ -219,5 +225,20 @@ public class MediaPlaybackService extends Service {
     private void updateNotification() {
         // Overloaded method for internal use
         updateNotification(isMuted ? "Muted" : "Playing", null);
+    }
+
+    private void updatePlaybackState(int state) {
+        PlaybackStateCompat.Builder playbackStateBuilder = new PlaybackStateCompat.Builder();
+        long actions = PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE;
+        playbackStateBuilder.setActions(actions);
+        playbackStateBuilder.setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f);
+        mediaSession.setPlaybackState(playbackStateBuilder.build());
+    }
+
+    public void updateMetadata(String title, Bitmap artwork) {
+        MediaMetadataCompat.Builder metadataBuilder = new MediaMetadataCompat.Builder();
+        metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
+        metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork);
+        mediaSession.setMetadata(metadataBuilder.build());
     }
 }
