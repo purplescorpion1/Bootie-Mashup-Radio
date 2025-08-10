@@ -256,6 +256,7 @@ public class MediaPlaybackService extends Service {
     public void updateMetadata(String title, Bitmap artwork) {
         MediaMetadataCompat.Builder metadataBuilder = new MediaMetadataCompat.Builder();
         metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, title);
+        metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, " ");
         metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork);
         mediaSession.setMetadata(metadataBuilder.build());
     }
