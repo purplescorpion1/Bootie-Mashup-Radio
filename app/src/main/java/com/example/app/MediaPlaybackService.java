@@ -14,17 +14,16 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
-import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
-import android.support.v4.media.session.PlaybackStateCompat;
-
 import androidx.core.app.NotificationCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
+import org.json.JSONObject;
 
 public class MediaPlaybackService extends Service {
 
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID = "media_playback_channel";
+    private String lastTitle = "";
 
     private MediaPlayer mediaPlayer;
     private boolean isPreparing = false;
@@ -158,6 +157,51 @@ public class MediaPlaybackService extends Service {
         return binder;
     }
 
+    private final Handler trackInfoHandler = new Handler(Looper.getMainLooper());
+    private final Runnable trackInfoRunnable = new Runnable() {
+        @Override
+        public void run() {
+            new FetchTrackInfoTask().execute();
+            trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
+        }
+    };
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        createNotificationChannel();
+        mediaSession = new MediaSessionCompat(this, "MediaPlaybackService");
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                play();
+            }
+
+            @Override
+            public void onPause() {
+                pause();
+            }
+
+            @Override
+            public void onStop() {
+                stop();
+                stopSelf();
+            }
+        });
+        mediaSession.setMediaButtonReceiver(null);
+        mediaPlayer = new MediaPlayer();
+        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            @Override
+            public void onPrepared(MediaPlayer mp) {
+                isPreparing = false;
+                mp.start();
+                startForeground(NOTIFICATION_ID, buildNotification("Playing", null));
+            }
+        });
+        trackInfoHandler.post(trackInfoRunnable);
+    }
+
     @Override
     public void onDestroy() {
         if (mediaPlayer != null) {
@@ -165,6 +209,7 @@ public class MediaPlaybackService extends Service {
             mediaPlayer = null;
         }
         mediaSession.release();
+        trackInfoHandler.removeCallbacks(trackInfoRunnable);
         super.onDestroy();
     }
 
@@ -262,5 +307,40 @@ public class MediaPlaybackService extends Service {
         metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, " ");
         metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork);
         mediaSession.setMetadata(metadataBuilder.build());
+    }
+
+    private class FetchTrackInfoTask extends android.os.AsyncTask<Void, Void, Void> {
+
+        @Override
+        protected Void doInBackground(Void... voids) {
+            try {
+                // Fetch Now Playing Info
+                java.net.URL url = new java.net.URL("https://c7.radioboss.fm/w/nowplayinginfo?u=205");
+                java.net.HttpURLConnection urlConnection = (java.net.HttpURLConnection) url.openConnection();
+                try {
+                    java.io.InputStream in = new java.io.BufferedInputStream(urlConnection.getInputStream());
+                    java.util.Scanner s = new java.util.Scanner(in).useDelimiter("\\A");
+                    String result = s.hasNext() ? s.next() : "";
+                    org.json.JSONObject json = new org.json.JSONObject(result);
+                    String title = json.getString("nowplaying");
+
+                    if (!title.equals(lastTitle)) {
+                        lastTitle = title;
+
+                        // Fetch Artwork
+                        java.net.URL imageUrl = new java.net.URL("https://c7.radioboss.fm/w/artwork/205.jpg");
+                        Bitmap artwork = android.graphics.BitmapFactory.decodeStream(imageUrl.openConnection().getInputStream());
+
+                        updateNotification(title, artwork);
+                        updateMetadata(title, artwork);
+                    }
+                } finally {
+                    urlConnection.disconnect();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
     }
 }
