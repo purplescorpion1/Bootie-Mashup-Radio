@@ -69,6 +69,7 @@ public class MediaPlaybackService extends Service {
                 startForeground(NOTIFICATION_ID, buildNotification("Playing", null));
             }
         });
+        trackInfoHandler.post(trackInfoRunnable);
     }
 
     private void createNotificationChannel() {
@@ -165,42 +166,6 @@ public class MediaPlaybackService extends Service {
             trackInfoHandler.postDelayed(this, 5000); // Check every 5 seconds
         }
     };
-
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        createNotificationChannel();
-        mediaSession = new MediaSessionCompat(this, "MediaPlaybackService");
-        mediaSession.setCallback(new MediaSessionCompat.Callback() {
-            @Override
-            public void onPlay() {
-                play();
-            }
-
-            @Override
-            public void onPause() {
-                pause();
-            }
-
-            @Override
-            public void onStop() {
-                stop();
-                stopSelf();
-            }
-        });
-        mediaSession.setMediaButtonReceiver(null);
-        mediaPlayer = new MediaPlayer();
-        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-            @Override
-            public void onPrepared(MediaPlayer mp) {
-                isPreparing = false;
-                mp.start();
-                startForeground(NOTIFICATION_ID, buildNotification("Playing", null));
-            }
-        });
-        trackInfoHandler.post(trackInfoRunnable);
-    }
 
     @Override
     public void onDestroy() {
