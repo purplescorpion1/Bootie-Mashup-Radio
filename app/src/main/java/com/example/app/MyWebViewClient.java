@@ -28,8 +28,8 @@ class MyWebViewClient extends WebViewClient {
         super.onPageFinished(view, url);
         view.loadUrl(
                 "javascript:(function() { " +
-                        "var title = document.getElementById('track-title').innerText;" +
-                        "var imageUrl = document.getElementById('track-image').src;" +
+                        "var title = document.getElementById('rbcloud_nowplaying6647').innerText;" +
+                        "var imageUrl = document.getElementById('rbcloud_cover1581').src;" +
                         "Android.updateTrackInfo(title, imageUrl);" +
                         "})()");
     }

@@ -146,7 +146,8 @@ public class MainActivity extends Activity {
             toast.cancel();
         }else {
             DoublePressToExit=true;
-            Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT).show();
+            toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
+            toast.show();
             Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable() {
                 @Override

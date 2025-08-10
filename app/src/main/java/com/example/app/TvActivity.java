@@ -148,6 +148,7 @@ public class TvActivity extends Activity {
                     playbtn.setImageResource(R.drawable.pause_highlighted);
                     Toast.makeText(TvActivity.this, "Audio is starting. Please wait...", Toast.LENGTH_SHORT).show();
                     updatePlaybackState(PlaybackStateCompat.STATE_PLAYING);
+                    mediaSession.setActive(true);
                 }
             }
         }
@@ -160,7 +161,8 @@ public class TvActivity extends Activity {
             toast.cancel();
         }else {
             DoublePressToExit=true;
-            Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT).show();
+            toast = Toast.makeText(this, "Press Again To Exit", Toast.LENGTH_SHORT);
+            toast.show();
             Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable() {
                 @Override

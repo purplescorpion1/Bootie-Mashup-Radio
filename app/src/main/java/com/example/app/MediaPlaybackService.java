@@ -65,21 +65,44 @@ public class MediaPlaybackService extends Service {
     }
 
     private Notification buildNotification(String contentText, Bitmap artwork) {
-        Intent stopIntent = new Intent(this, MediaPlaybackService.class);
-        stopIntent.setAction("STOP_ACTION");
-        PendingIntent stopPendingIntent = PendingIntent.getService(this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE);
+        // Play/Pause action
+        Intent playPauseIntent = new Intent(this, MediaPlaybackService.class);
+        int playPauseIcon;
+        String playPauseTitle;
+        if (isPlaying()) {
+            playPauseIntent.setAction("PAUSE_ACTION");
+            playPauseIcon = R.drawable.ic_pause;
+            playPauseTitle = "Pause";
+        } else {
+            playPauseIntent.setAction("PLAY_ACTION");
+            playPauseIcon = R.drawable.ic_play;
+            playPauseTitle = "Play";
+        }
+        PendingIntent playPausePendingIntent = PendingIntent.getService(this, 0, playPauseIntent, PendingIntent.FLAG_IMMUTABLE);
 
-        Intent muteIntent = new Intent(this, MediaPlaybackService.class);
-        muteIntent.setAction("MUTE_ACTION");
-        PendingIntent mutePendingIntent = PendingIntent.getService(this, 0, muteIntent, PendingIntent.FLAG_IMMUTABLE);
+        // Mute/Unmute action
+        Intent muteUnmuteIntent = new Intent(this, MediaPlaybackService.class);
+        int muteUnmuteIcon;
+        String muteUnmuteTitle;
+        if (isMuted) {
+            muteUnmuteIntent.setAction("UNMUTE_ACTION");
+            muteUnmuteIcon = R.drawable.ic_unmute;
+            muteUnmuteTitle = "Unmute";
+        } else {
+            muteUnmuteIntent.setAction("MUTE_ACTION");
+            muteUnmuteIcon = R.drawable.ic_mute;
+            muteUnmuteTitle = "Mute";
+        }
+        PendingIntent muteUnmutePendingIntent = PendingIntent.getService(this, 0, muteUnmuteIntent, PendingIntent.FLAG_IMMUTABLE);
+
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Pirate Radio")
+                .setContentTitle("Bootie Mashup Radio")
                 .setContentText(contentText)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setLargeIcon(artwork)
-                .addAction(R.drawable.ic_stop, "Stop", stopPendingIntent)
-                .addAction(R.drawable.ic_mute, "Mute", mutePendingIntent)
+                .addAction(playPauseIcon, playPauseTitle, playPausePendingIntent)
+                .addAction(muteUnmuteIcon, muteUnmuteTitle, muteUnmutePendingIntent)
                 .setStyle(new MediaStyle()
                         .setShowActionsInCompactView(0, 1)
                         .setMediaSession(mediaSession.getSessionToken()))
@@ -92,12 +115,17 @@ public class MediaPlaybackService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && intent.getAction() != null) {
             switch (intent.getAction()) {
-                case "STOP_ACTION":
-                    stop();
-                    stopSelf();
+                case "PLAY_ACTION":
+                    play();
+                    break;
+                case "PAUSE_ACTION":
+                    pause();
                     break;
                 case "MUTE_ACTION":
                     mute();
+                    break;
+                case "UNMUTE_ACTION":
+                    unmute();
                     break;
             }
         }
@@ -138,6 +166,15 @@ public class MediaPlaybackService extends Service {
         if (mediaPlayer.isPlaying()) {
             mediaPlayer.stop();
             mediaPlayer.reset();
+            updateNotification();
+        }
+    }
+
+    public void pause() {
+        if (mediaPlayer.isPlaying()) {
+            mediaPlayer.stop();
+            mediaPlayer.reset();
+            updateNotification();
         }
     }
 
