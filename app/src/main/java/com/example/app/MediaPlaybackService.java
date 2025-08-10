@@ -123,7 +123,8 @@ public class MediaPlaybackService extends Service {
                 .setStyle(new MediaStyle()
                         .setShowActionsInCompactView(0, 1)
                         .setMediaSession(mediaSession.getSessionToken()))
-                .setPriority(NotificationCompat.PRIORITY_LOW);
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOnlyAlertOnce(true);
 
         return builder.build();
     }
