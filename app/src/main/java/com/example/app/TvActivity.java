@@ -121,12 +121,10 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                // Sync local state with the service state and update UI
-                if (TvActivity.this.isMuted != isMuted) {
-                    TvActivity.this.isMuted = isMuted;
-                    updateMuteButton(isMuted);
-                    showMuteToast(isMuted);
-                }
+                // Unconditionally update UI to handle TV remote events correctly.
+                TvActivity.this.isMuted = isMuted;
+                updateMuteButton(isMuted);
+                showMuteToast(isMuted);
             }
         });
     }
