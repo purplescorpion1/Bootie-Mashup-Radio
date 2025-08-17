@@ -26,6 +26,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
     boolean DoublePressToExit = false;
     private AudioManager audioManager;
     private Toast toast;
+    private boolean isMuted = false;
     // creating a variable for
     // button and media player
 
@@ -68,8 +69,14 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isBound) {
-                    mediaPlaybackService.toggleMute();
+                // Optimistically update the UI
+                isMuted = !isMuted;
+                updateMuteButton(isMuted);
+                showMuteToast(isMuted);
+
+                // Tell the system to toggle the mute state
+                if (audioManager != null) {
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
                 }
             }
         });
@@ -105,13 +112,21 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         }
     }
 
+    private void showMuteToast(boolean muted) {
+        Toast.makeText(getApplicationContext(), muted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     public void onMuteStateChanged(final boolean isMuted) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                updateMuteButton(isMuted);
-                Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+                // Sync local state with the service state and update UI
+                if (TvActivity.this.isMuted != isMuted) {
+                    TvActivity.this.isMuted = isMuted;
+                    updateMuteButton(isMuted);
+                    showMuteToast(isMuted);
+                }
             }
         });
     }
@@ -124,7 +139,8 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             isBound = true;
             mediaPlaybackService.registerMuteStateListener(TvActivity.this);
             // Sync initial state
-            updateMuteButton(mediaPlaybackService.isMuted());
+            isMuted = mediaPlaybackService.isMuted();
+            updateMuteButton(isMuted);
         }
 
         @Override
