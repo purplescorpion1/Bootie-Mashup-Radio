@@ -25,7 +25,8 @@ import android.os.IBinder;
 public class TvActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
     private AudioManager audioManager;
-    Toast toast;
+    private Toast toast;
+    private Toast muteToast;
     // creating a variable for
     // button and media player
 
@@ -63,6 +64,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
 
         // Find your ImageView (btnmute) by its ID
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        muteToast = Toast.makeText(getApplicationContext(), "", Toast.LENGTH_SHORT);
 
         // Set a click listener for the Mute button
         btnMute.setOnClickListener(new View.OnClickListener() {
@@ -111,11 +113,8 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             @Override
             public void run() {
                 updateMuteButton(isMuted);
-                if (toast != null) {
-                    toast.cancel();
-                }
-                toast = Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
-                toast.show();
+                muteToast.setText(isMuted ? "Audio has been muted" : "Audio has been unmuted");
+                muteToast.show();
             }
         });
     }

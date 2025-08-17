@@ -22,7 +22,8 @@ import android.os.IBinder;
 
 public class MainActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
-    Toast toast;
+    private Toast toast;
+    private Toast muteToast;
     // creating a variable for
     // button and media player
 
@@ -65,6 +66,7 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
                 toggleMute(); // Toggle mute state when the image is clicked
             }
         });
+        muteToast = Toast.makeText(getApplicationContext(), "", Toast.LENGTH_SHORT);
 
         Intent intent = new Intent(this, MediaPlaybackService.class);
         startService(intent);
@@ -147,11 +149,8 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
             @Override
             public void run() {
                 updateMuteButton(isMuted);
-                if (toast != null) {
-                    toast.cancel();
-                }
-                toast = Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
-                toast.show();
+                muteToast.setText(isMuted ? "Audio has been muted" : "Audio has been unmuted");
+                muteToast.show();
             }
         });
     }
