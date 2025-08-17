@@ -69,7 +69,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             @Override
             public void onClick(View v) {
                 if (audioManager != null) {
-                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI);
                 }
             }
         });
