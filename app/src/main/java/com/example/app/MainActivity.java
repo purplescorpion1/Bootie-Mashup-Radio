@@ -150,7 +150,11 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
             @Override
             public void run() {
                 updateMuteButton(isMuted);
-                Toast.makeText(MainActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+                if (toast != null) {
+                    toast.cancel();
+                }
+                toast = Toast.makeText(MainActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
+                toast.show();
             }
         });
     }

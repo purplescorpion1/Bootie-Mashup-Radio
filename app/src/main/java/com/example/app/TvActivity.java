@@ -12,6 +12,7 @@ import android.widget.ImageView;
 import android.widget.Toast;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.view.KeyEvent;
 import android.view.View;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -64,19 +65,8 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         // Find your ImageView (btnmute) by its ID
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
-        // Set a click listener for the Mute button
-        btnMute.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
-                    if (mediaPlaybackService.isMuted()) {
-                        mediaPlaybackService.unmute();
-                    } else {
-                        mediaPlaybackService.mute();
-                    }
-                }
-            }
-        });
+        // Mute button logic is now handled in onKeyDown to consume the event
+        // and prevent it from being handled by the system's IR service as well.
 
         Intent intent = new Intent(this, MediaPlaybackService.class);
         startService(intent);
@@ -115,7 +105,11 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             @Override
             public void run() {
                 updateMuteButton(isMuted);
-                Toast.makeText(TvActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+                if (toast != null) {
+                    toast.cancel();
+                }
+                toast = Toast.makeText(TvActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
+                toast.show();
             }
         });
     }
@@ -177,6 +171,21 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
                 }
             },2000);
         }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_MUTE) {
+            if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
+                if (mediaPlaybackService.isMuted()) {
+                    mediaPlaybackService.unmute();
+                } else {
+                    mediaPlaybackService.mute();
+                }
+            }
+            return true; // Consume the event
+        }
+        return super.onKeyDown(keyCode, event);
     }
 
 }
