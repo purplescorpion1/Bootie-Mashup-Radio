@@ -127,12 +127,9 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
     };
 
     private void toggleMute() {
-        if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
-            if (mediaPlaybackService.isMuted()) {
-                mediaPlaybackService.unmute();
-            } else {
-                mediaPlaybackService.mute();
-            }
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
         }
     }
 

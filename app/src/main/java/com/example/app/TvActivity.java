@@ -68,12 +68,8 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
-                    if (mediaPlaybackService.isMuted()) {
-                        mediaPlaybackService.unmute();
-                    } else {
-                        mediaPlaybackService.mute();
-                    }
+                if (audioManager != null) {
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
                 }
             }
         });
