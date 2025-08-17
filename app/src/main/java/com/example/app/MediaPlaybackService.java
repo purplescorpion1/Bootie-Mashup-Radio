@@ -103,7 +103,9 @@ public class MediaPlaybackService extends Service {
             }
         });
         volumeChangeReceiver = new VolumeChangeReceiver();
-        IntentFilter filter = new IntentFilter("android.media.VOLUME_CHANGED_ACTION");
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("android.media.VOLUME_CHANGED_ACTION");
+        filter.addAction("android.media.STREAM_MUTE_CHANGED_ACTION");
         registerReceiver(volumeChangeReceiver, filter);
         trackInfoHandler.post(trackInfoRunnable);
     }
