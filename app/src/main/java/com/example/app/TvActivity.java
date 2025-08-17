@@ -12,7 +12,6 @@ import android.widget.ImageView;
 import android.widget.Toast;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
-import android.view.KeyEvent;
 import android.view.View;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -171,21 +170,6 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
                 }
             },2000);
         }
-    }
-
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_MUTE) {
-            if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
-                if (mediaPlaybackService.isMuted()) {
-                    mediaPlaybackService.unmute();
-                } else {
-                    mediaPlaybackService.mute();
-                }
-            }
-            return true; // Consume the event
-        }
-        return super.onKeyDown(keyCode, event);
     }
 
 }

@@ -317,17 +317,20 @@ public class MediaPlaybackService extends Service {
     private class VolumeChangeReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-            int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            if ("android.media.VOLUME_CHANGED_ACTION".equals(intent.getAction())) {
+                AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+                boolean systemIsMuted = false;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    systemIsMuted = audioManager.isStreamMute(AudioManager.STREAM_MUSIC);
+                }
+                int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                boolean isEffectivelyMuted = systemIsMuted || currentVolume == 0;
 
-            if (isMuted && currentVolume > 0) {
-                isMuted = false;
-                updateNotification();
-                notifyMuteStateChanged(false);
-            } else if (!isMuted && currentVolume == 0) {
-                isMuted = true;
-                updateNotification();
-                notifyMuteStateChanged(true);
+                if (isMuted != isEffectivelyMuted) {
+                    isMuted = isEffectivelyMuted;
+                    updateNotification();
+                    notifyMuteStateChanged(isMuted);
+                }
             }
         }
     }
