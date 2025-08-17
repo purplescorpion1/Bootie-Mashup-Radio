@@ -22,9 +22,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 
-public class TvActivity extends Activity {
+public class TvActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
-    private boolean isMuted = false; // Initial mute state
     private AudioManager audioManager;
     Toast toast;
     // creating a variable for
@@ -70,17 +69,11 @@ public class TvActivity extends Activity {
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isBound && mediaPlaybackService.isPlaying()) {
-                    if (isMuted) {
+                if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
+                    if (mediaPlaybackService.isMuted()) {
                         mediaPlaybackService.unmute();
-                        isMuted = false;
-                        btnMute.setImageResource(R.drawable.mute_highlighted);
-                        Toast.makeText(TvActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
                     } else {
                         mediaPlaybackService.mute();
-                        isMuted = true;
-                        btnMute.setImageResource(R.drawable.unmute_highlighted);
-                        Toast.makeText(TvActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
                     }
                 }
             }
@@ -101,9 +94,31 @@ public class TvActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (isBound) {
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(this);
+            }
             unbindService(serviceConnection);
             isBound = false;
         }
+    }
+
+    private void updateMuteButton(boolean muted) {
+        if (muted) {
+            btnMute.setImageResource(R.drawable.unmute_highlighted);
+        } else {
+            btnMute.setImageResource(R.drawable.mute_highlighted);
+        }
+    }
+
+    @Override
+    public void onMuteStateChanged(final boolean isMuted) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateMuteButton(isMuted);
+                Toast.makeText(TvActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -112,11 +127,16 @@ public class TvActivity extends Activity {
             MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
             mediaPlaybackService = binder.getService();
             isBound = true;
+            mediaPlaybackService.registerMuteStateListener(TvActivity.this);
+            updateMuteButton(mediaPlaybackService.isMuted());
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(TvActivity.this);
+            }
         }
     };
 

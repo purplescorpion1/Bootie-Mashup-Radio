@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
@@ -24,7 +26,32 @@ import androidx.core.app.NotificationCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class MediaPlaybackService extends Service {
+
+    public interface MuteStateListener {
+        void onMuteStateChanged(boolean isMuted);
+    }
+
+    private final List<MuteStateListener> muteStateListeners = new ArrayList<>();
+
+    public void registerMuteStateListener(MuteStateListener listener) {
+        if (!muteStateListeners.contains(listener)) {
+            muteStateListeners.add(listener);
+        }
+    }
+
+    public void unregisterMuteStateListener(MuteStateListener listener) {
+        muteStateListeners.remove(listener);
+    }
+
+    private void notifyMuteStateChanged(boolean isMuted) {
+        for (MuteStateListener listener : muteStateListeners) {
+            listener.onMuteStateChanged(isMuted);
+        }
+    }
 
     private static final int NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID = "media_playback_channel";
@@ -34,6 +61,7 @@ public class MediaPlaybackService extends Service {
     private boolean isPreparing = false;
     private MediaSessionCompat mediaSession;
     private final IBinder binder = new LocalBinder();
+    private VolumeChangeReceiver volumeChangeReceiver;
 
     public class LocalBinder extends Binder {
         MediaPlaybackService getService() {
@@ -74,6 +102,9 @@ public class MediaPlaybackService extends Service {
                 startForeground(NOTIFICATION_ID, buildNotification("Playing", null));
             }
         });
+        volumeChangeReceiver = new VolumeChangeReceiver();
+        IntentFilter filter = new IntentFilter("android.media.VOLUME_CHANGED_ACTION");
+        registerReceiver(volumeChangeReceiver, filter);
         trackInfoHandler.post(trackInfoRunnable);
     }
 
@@ -179,6 +210,7 @@ public class MediaPlaybackService extends Service {
             mediaPlayer = null;
         }
         mediaSession.release();
+        unregisterReceiver(volumeChangeReceiver);
         trackInfoHandler.removeCallbacks(trackInfoRunnable);
         super.onDestroy();
     }
@@ -227,6 +259,10 @@ public class MediaPlaybackService extends Service {
     private boolean isMuted = false;
     private int previousVolume = -1;
 
+    public boolean isMuted() {
+        return isMuted;
+    }
+
     public void mute() {
         if (mediaPlayer.isPlaying()) {
             AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
@@ -235,6 +271,7 @@ public class MediaPlaybackService extends Service {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
                 isMuted = true;
                 updateNotification();
+                notifyMuteStateChanged(true);
             }
         }
     }
@@ -245,9 +282,15 @@ public class MediaPlaybackService extends Service {
             if (isMuted) {
                 if (previousVolume != -1) {
                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, previousVolume, 0);
+                } else {
+                    // If we don't have a previous volume, just unmute to a default value
+                    int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                    int defaultVolume = maxVolume / 2;
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVolume, 0);
                 }
                 isMuted = false;
                 updateNotification();
+                notifyMuteStateChanged(false);
             }
         }
     }
@@ -269,6 +312,24 @@ public class MediaPlaybackService extends Service {
         playbackStateBuilder.setActions(actions);
         playbackStateBuilder.setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f);
         mediaSession.setPlaybackState(playbackStateBuilder.build());
+    }
+
+    private class VolumeChangeReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+            int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+
+            if (isMuted && currentVolume > 0) {
+                isMuted = false;
+                updateNotification();
+                notifyMuteStateChanged(false);
+            } else if (!isMuted && currentVolume == 0) {
+                isMuted = true;
+                updateNotification();
+                notifyMuteStateChanged(true);
+            }
+        }
     }
 
     public void updateMetadata(String title, Bitmap artwork) {

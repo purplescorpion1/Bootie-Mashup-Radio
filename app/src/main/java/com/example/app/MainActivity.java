@@ -20,9 +20,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
-    private boolean isMuted = false; // Initial mute state
     Toast toast;
     // creating a variable for
     // button and media player
@@ -85,6 +84,9 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (isBound) {
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(this);
+            }
             unbindService(serviceConnection);
             isBound = false;
         }
@@ -96,11 +98,16 @@ public class MainActivity extends Activity {
             MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
             mediaPlaybackService = binder.getService();
             isBound = true;
+            mediaPlaybackService.registerMuteStateListener(MainActivity.this);
+            updateMuteButton(mediaPlaybackService.isMuted());
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(MainActivity.this);
+            }
         }
     };
 
@@ -123,19 +130,32 @@ public class MainActivity extends Activity {
     };
 
     private void toggleMute() {
-        if (isBound && mediaPlaybackService.isPlaying()) {
-            if (isMuted) {
+        if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
+            if (mediaPlaybackService.isMuted()) {
                 mediaPlaybackService.unmute();
-                isMuted = false;
-                btnMute.setImageResource(R.drawable.mute);
-                Toast.makeText(MainActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
             } else {
                 mediaPlaybackService.mute();
-                isMuted = true;
-                btnMute.setImageResource(R.drawable.unmute);
-                Toast.makeText(MainActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
             }
         }
+    }
+
+    private void updateMuteButton(boolean isMuted) {
+        if (isMuted) {
+            btnMute.setImageResource(R.drawable.unmute);
+        } else {
+            btnMute.setImageResource(R.drawable.mute);
+        }
+    }
+
+    @Override
+    public void onMuteStateChanged(final boolean isMuted) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateMuteButton(isMuted);
+                Toast.makeText(MainActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     @Override
