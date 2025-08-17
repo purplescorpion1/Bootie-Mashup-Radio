@@ -20,12 +20,10 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
-    private boolean isMuted = false; // Initial mute state
-    Toast toast;
-    // creating a variable for
-    // button and media player
+    private Toast toast;
+    private boolean isMuted = false; // Local state for optimistic UI
 
     ImageView playbtn;
     ImageView btnMute;
@@ -59,9 +57,6 @@ public class MainActivity extends Activity {
 
         handler = new Handler();
 
-        // Find your ImageView (btnmute) by its ID
-        ImageView btnMute = findViewById(R.id.btnmute);
-
         // Set an OnClickListener for the ImageView
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -85,6 +80,9 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (isBound) {
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(this);
+            }
             unbindService(serviceConnection);
             isBound = false;
         }
@@ -96,11 +94,18 @@ public class MainActivity extends Activity {
             MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
             mediaPlaybackService = binder.getService();
             isBound = true;
+            mediaPlaybackService.registerMuteStateListener(MainActivity.this);
+            // Sync initial state
+            isMuted = mediaPlaybackService.isMuted();
+            updateMuteButton(isMuted);
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(MainActivity.this);
+            }
         }
     };
 
@@ -123,19 +128,42 @@ public class MainActivity extends Activity {
     };
 
     private void toggleMute() {
-        if (isBound && mediaPlaybackService.isPlaying()) {
-            if (isMuted) {
-                mediaPlaybackService.unmute();
-                isMuted = false;
-                btnMute.setImageResource(R.drawable.mute);
-                Toast.makeText(MainActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
-            } else {
-                mediaPlaybackService.mute();
-                isMuted = true;
-                btnMute.setImageResource(R.drawable.unmute);
-                Toast.makeText(MainActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
-            }
+        // Optimistically update the UI
+        isMuted = !isMuted;
+        updateMuteButton(isMuted);
+        showMuteToast(isMuted);
+
+        // Tell the system to toggle the mute state
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
         }
+    }
+
+    private void updateMuteButton(boolean isMuted) {
+        if (isMuted) {
+            btnMute.setImageResource(R.drawable.unmute);
+        } else {
+            btnMute.setImageResource(R.drawable.mute);
+        }
+    }
+
+    private void showMuteToast(boolean muted) {
+        Toast.makeText(getApplicationContext(), muted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onMuteStateChanged(final boolean isMuted) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                // Sync local state with the service state and update UI
+                if (MainActivity.this.isMuted != isMuted) {
+                    MainActivity.this.isMuted = isMuted;
+                    updateMuteButton(isMuted);
+                }
+            }
+        });
     }
 
     @Override

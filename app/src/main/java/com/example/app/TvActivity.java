@@ -22,11 +22,11 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.IBinder;
 
-public class TvActivity extends Activity {
+public class TvActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
-    private boolean isMuted = false; // Initial mute state
     private AudioManager audioManager;
-    Toast toast;
+    private Toast toast;
+    private boolean isMuted = false;
     // creating a variable for
     // button and media player
 
@@ -63,25 +63,20 @@ public class TvActivity extends Activity {
         handler = new Handler();
 
         // Find your ImageView (btnmute) by its ID
-        ImageView btnMute = findViewById(R.id.btnmute);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
         // Set a click listener for the Mute button
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isBound && mediaPlaybackService.isPlaying()) {
-                    if (isMuted) {
-                        mediaPlaybackService.unmute();
-                        isMuted = false;
-                        btnMute.setImageResource(R.drawable.mute_highlighted);
-                        Toast.makeText(TvActivity.this, "Audio has been unmuted", Toast.LENGTH_SHORT).show();
-                    } else {
-                        mediaPlaybackService.mute();
-                        isMuted = true;
-                        btnMute.setImageResource(R.drawable.unmute_highlighted);
-                        Toast.makeText(TvActivity.this, "Audio has been muted", Toast.LENGTH_SHORT).show();
-                    }
+                // Optimistically update the UI
+                isMuted = !isMuted;
+                updateMuteButton(isMuted);
+                showMuteToast(isMuted);
+
+                // Tell the system to toggle the mute state
+                if (audioManager != null) {
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
                 }
             }
         });
@@ -101,9 +96,38 @@ public class TvActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         if (isBound) {
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(this);
+            }
             unbindService(serviceConnection);
             isBound = false;
         }
+    }
+
+    private void updateMuteButton(boolean muted) {
+        if (muted) {
+            btnMute.setImageResource(R.drawable.unmute_highlighted);
+        } else {
+            btnMute.setImageResource(R.drawable.mute_highlighted);
+        }
+    }
+
+    private void showMuteToast(boolean muted) {
+        Toast.makeText(getApplicationContext(), muted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onMuteStateChanged(final boolean isMuted) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                // Sync local state with the service state and update UI
+                if (TvActivity.this.isMuted != isMuted) {
+                    TvActivity.this.isMuted = isMuted;
+                    updateMuteButton(isMuted);
+                }
+            }
+        });
     }
 
     private ServiceConnection serviceConnection = new ServiceConnection() {
@@ -112,11 +136,18 @@ public class TvActivity extends Activity {
             MediaPlaybackService.LocalBinder binder = (MediaPlaybackService.LocalBinder) service;
             mediaPlaybackService = binder.getService();
             isBound = true;
+            mediaPlaybackService.registerMuteStateListener(TvActivity.this);
+            // Sync initial state
+            isMuted = mediaPlaybackService.isMuted();
+            updateMuteButton(isMuted);
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             isBound = false;
+            if (mediaPlaybackService != null) {
+                mediaPlaybackService.unregisterMuteStateListener(TvActivity.this);
+            }
         }
     };
 
