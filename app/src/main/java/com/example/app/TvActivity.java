@@ -64,8 +64,19 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         // Find your ImageView (btnmute) by its ID
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
-        // Mute button logic is now handled in onKeyDown to consume the event
-        // and prevent it from being handled by the system's IR service as well.
+        // Set a click listener for the Mute button
+        btnMute.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (isBound && mediaPlaybackService != null && mediaPlaybackService.isPlaying()) {
+                    if (mediaPlaybackService.isMuted()) {
+                        mediaPlaybackService.unmute();
+                    } else {
+                        mediaPlaybackService.mute();
+                    }
+                }
+            }
+        });
 
         Intent intent = new Intent(this, MediaPlaybackService.class);
         startService(intent);
