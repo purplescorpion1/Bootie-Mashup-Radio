@@ -258,18 +258,12 @@ public class MediaPlaybackService extends Service {
 
     private boolean isMuted = false;
     private int previousVolume = -1;
-    private long lastMuteToggleTime = 0;
 
     public boolean isMuted() {
         return isMuted;
     }
 
     public void mute() {
-        if (System.currentTimeMillis() - lastMuteToggleTime < 500) {
-            return;
-        }
-        lastMuteToggleTime = System.currentTimeMillis();
-
         if (mediaPlayer.isPlaying()) {
             AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
             if (!isMuted) {
@@ -283,11 +277,6 @@ public class MediaPlaybackService extends Service {
     }
 
     public void unmute() {
-        if (System.currentTimeMillis() - lastMuteToggleTime < 500) {
-            return;
-        }
-        lastMuteToggleTime = System.currentTimeMillis();
-
         if (mediaPlayer.isPlaying()) {
             AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
             if (isMuted) {

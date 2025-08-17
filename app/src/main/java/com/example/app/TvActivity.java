@@ -12,7 +12,6 @@ import android.widget.ImageView;
 import android.widget.Toast;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
-import android.view.KeyEvent;
 import android.view.View;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -27,7 +26,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
     boolean DoublePressToExit = false;
     private AudioManager audioManager;
     private Toast toast;
-    private Toast muteToast;
+    private boolean isMuted = false;
     // creating a variable for
     // button and media player
 
@@ -65,18 +64,19 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
 
         // Find your ImageView (btnmute) by its ID
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-        muteToast = Toast.makeText(getApplicationContext(), "", Toast.LENGTH_SHORT);
 
         // Set a click listener for the Mute button
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isBound && mediaPlaybackService != null) {
-                    if (mediaPlaybackService.isMuted()) {
-                        mediaPlaybackService.unmute();
-                    } else {
-                        mediaPlaybackService.mute();
-                    }
+                // Optimistically update the UI
+                isMuted = !isMuted;
+                updateMuteButton(isMuted);
+                showMuteToast(isMuted);
+
+                // Tell the system to toggle the mute state
+                if (audioManager != null) {
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
                 }
             }
         });
@@ -112,14 +112,20 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         }
     }
 
+    private void showMuteToast(boolean muted) {
+        Toast.makeText(getApplicationContext(), muted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     public void onMuteStateChanged(final boolean isMuted) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                updateMuteButton(isMuted);
-                muteToast.setText(isMuted ? "Audio has been muted" : "Audio has been unmuted");
-                muteToast.show();
+                // Sync local state with the service state and update UI
+                if (TvActivity.this.isMuted != isMuted) {
+                    TvActivity.this.isMuted = isMuted;
+                    updateMuteButton(isMuted);
+                }
             }
         });
     }
@@ -131,7 +137,9 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             mediaPlaybackService = binder.getService();
             isBound = true;
             mediaPlaybackService.registerMuteStateListener(TvActivity.this);
-            updateMuteButton(mediaPlaybackService.isMuted());
+            // Sync initial state
+            isMuted = mediaPlaybackService.isMuted();
+            updateMuteButton(isMuted);
         }
 
         @Override
@@ -181,21 +189,6 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
                 }
             },2000);
         }
-    }
-
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_MUTE) {
-            if (isBound && mediaPlaybackService != null) {
-                if (mediaPlaybackService.isMuted()) {
-                    mediaPlaybackService.unmute();
-                } else {
-                    mediaPlaybackService.mute();
-                }
-            }
-            return true; // Consume the event
-        }
-        return super.onKeyDown(keyCode, event);
     }
 
 }
