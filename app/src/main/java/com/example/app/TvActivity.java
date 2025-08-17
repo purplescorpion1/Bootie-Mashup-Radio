@@ -125,6 +125,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
                 if (TvActivity.this.isMuted != isMuted) {
                     TvActivity.this.isMuted = isMuted;
                     updateMuteButton(isMuted);
+                    showMuteToast(isMuted);
                 }
             }
         });

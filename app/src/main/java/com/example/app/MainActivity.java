@@ -161,6 +161,7 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
                 if (MainActivity.this.isMuted != isMuted) {
                     MainActivity.this.isMuted = isMuted;
                     updateMuteButton(isMuted);
+                    showMuteToast(isMuted);
                 }
             }
         });
