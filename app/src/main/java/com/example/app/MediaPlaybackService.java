@@ -257,40 +257,36 @@ public class MediaPlaybackService extends Service {
     }
 
     private boolean isMuted = false;
-    private int previousVolume = -1;
 
     public boolean isMuted() {
         return isMuted;
     }
 
     public void mute() {
-        if (mediaPlayer.isPlaying()) {
-            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (!isMuted) {
-                previousVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
-                isMuted = true;
-                updateNotification();
-                notifyMuteStateChanged(true);
-            }
+        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0);
+        } else {
+            audioManager.setStreamMute(AudioManager.STREAM_MUSIC, true);
         }
     }
 
     public void unmute() {
-        if (mediaPlayer.isPlaying()) {
-            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (isMuted) {
-                if (previousVolume != -1) {
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, previousVolume, 0);
-                } else {
-                    // If we don't have a previous volume, just unmute to a default value
-                    int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                    int defaultVolume = maxVolume / 2;
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, defaultVolume, 0);
-                }
-                isMuted = false;
-                updateNotification();
-                notifyMuteStateChanged(false);
+        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
+        } else {
+            audioManager.setStreamMute(AudioManager.STREAM_MUSIC, false);
+        }
+    }
+
+    public void toggleMute() {
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
+            } else {
+                audioManager.setStreamMute(AudioManager.STREAM_MUSIC, !isMuted);
             }
         }
     }

@@ -23,7 +23,6 @@ import android.os.IBinder;
 public class MainActivity extends Activity implements MediaPlaybackService.MuteStateListener {
     boolean DoublePressToExit = false;
     private Toast toast;
-    private boolean isMuted = false; // Local state for optimistic UI
 
     ImageView playbtn;
     ImageView btnMute;
@@ -61,7 +60,9 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                toggleMute(); // Toggle mute state when the image is clicked
+                if (isBound) {
+                    mediaPlaybackService.toggleMute();
+                }
             }
         });
 
@@ -96,8 +97,7 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
             isBound = true;
             mediaPlaybackService.registerMuteStateListener(MainActivity.this);
             // Sync initial state
-            isMuted = mediaPlaybackService.isMuted();
-            updateMuteButton(isMuted);
+            updateMuteButton(mediaPlaybackService.isMuted());
         }
 
         @Override
@@ -127,19 +127,6 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
         }
     };
 
-    private void toggleMute() {
-        // Optimistically update the UI
-        isMuted = !isMuted;
-        updateMuteButton(isMuted);
-        showMuteToast(isMuted);
-
-        // Tell the system to toggle the mute state
-        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        if (audioManager != null) {
-            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
-        }
-    }
-
     private void updateMuteButton(boolean isMuted) {
         if (isMuted) {
             btnMute.setImageResource(R.drawable.unmute);
@@ -148,20 +135,13 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
         }
     }
 
-    private void showMuteToast(boolean muted) {
-        Toast.makeText(getApplicationContext(), muted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
-    }
-
     @Override
     public void onMuteStateChanged(final boolean isMuted) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                // Sync local state with the service state and update UI
-                if (MainActivity.this.isMuted != isMuted) {
-                    MainActivity.this.isMuted = isMuted;
-                    updateMuteButton(isMuted);
-                }
+                updateMuteButton(isMuted);
+                Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT).show();
             }
         });
     }
