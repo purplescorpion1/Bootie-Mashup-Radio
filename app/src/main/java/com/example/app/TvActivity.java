@@ -69,7 +69,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
             @Override
             public void onClick(View v) {
                 if (audioManager != null) {
-                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI);
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
                 }
             }
         });
@@ -114,7 +114,7 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
                 if (toast != null) {
                     toast.cancel();
                 }
-                toast = Toast.makeText(TvActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
+                toast = Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
                 toast.show();
             }
         });

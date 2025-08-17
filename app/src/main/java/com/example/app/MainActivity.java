@@ -129,7 +129,7 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
     private void toggleMute() {
         AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         if (audioManager != null) {
-            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI);
+            audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0);
         }
     }
 
@@ -150,7 +150,7 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
                 if (toast != null) {
                     toast.cancel();
                 }
-                toast = Toast.makeText(MainActivity.this, isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
+                toast = Toast.makeText(getApplicationContext(), isMuted ? "Audio has been muted" : "Audio has been unmuted", Toast.LENGTH_SHORT);
                 toast.show();
             }
         });
