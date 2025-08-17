@@ -62,7 +62,6 @@ public class TvActivity extends Activity implements MediaPlaybackService.MuteSta
         handler = new Handler();
 
         // Find your ImageView (btnmute) by its ID
-        ImageView btnMute = findViewById(R.id.btnmute);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
 
         // Set a click listener for the Mute button

@@ -58,9 +58,6 @@ public class MainActivity extends Activity implements MediaPlaybackService.MuteS
 
         handler = new Handler();
 
-        // Find your ImageView (btnmute) by its ID
-        ImageView btnMute = findViewById(R.id.btnmute);
-
         // Set an OnClickListener for the ImageView
         btnMute.setOnClickListener(new View.OnClickListener() {
             @Override
