@@ -15,6 +15,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -45,8 +46,17 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        // Create player
-        player = ExoPlayer.Builder(this).build()
+        // Create track selector to disable ICY/stream metadata tracks
+        val trackSelector = DefaultTrackSelector(this).apply {
+            parameters = buildUponParameters()
+                .setTrackTypeDisabled(C.TRACK_TYPE_METADATA, true)
+                .build()
+        }
+
+        // Create player with track selector
+        player = ExoPlayer.Builder(this)
+            .setTrackSelector(trackSelector)
+            .build()
 
         // Handle audio focus automatically
         val audioAttributes = AudioAttributes.Builder()
@@ -59,16 +69,18 @@ class PlaybackService : MediaSessionService() {
         val mediaItem = MediaItem.Builder()
             .setUri("https://c7.radioboss.fm:18205/stream")
             .setMediaId("bootie_mashup_stream")
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle("Live Stream")
-                    .setArtist("Bootie Mashup Radio")
-                    .setAlbumTitle("Bootie Mashup Radio")
-                    .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
-                    .build()
-            )
             .build()
         player.setMediaItem(mediaItem)
+
+        // Set initial playlist metadata
+        val initialMetadata = MediaMetadata.Builder()
+            .setTitle("Live Stream")
+            .setArtist("Bootie Mashup Radio")
+            .setAlbumTitle("Bootie Mashup Radio")
+            .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
+            .build()
+        player.setPlaylistMetadata(initialMetadata)
+
         player.prepare()
         player.playWhenReady = true
 
@@ -169,18 +181,34 @@ class PlaybackService : MediaSessionService() {
                 val nowPlaying = json.optString("nowplaying", "Bootie Mashup Radio")
                 val artist = json.optString("currenttrack_artist", "Bootie Mashup Radio")
                 val title = json.optString("currenttrack_title", "Live Stream")
+                val nextTrack = json.optString("nexttrack", "")
 
                 withContext(Dispatchers.Main) {
                     val artworkUri = Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis())
+
+                    val extras = Bundle().apply {
+                        putString("next_track", nextTrack)
+                    }
+
                     val updatedMetadata = MediaMetadata.Builder()
                         .setTitle(title)
                         .setArtist(artist)
                         .setAlbumTitle("Bootie Mashup Radio")
                         .setArtworkUri(artworkUri)
                         .setDisplayTitle(nowPlaying)
+                        .setExtras(extras)
                         .build()
 
                     player.setPlaylistMetadata(updatedMetadata)
+
+                    // Also update the current media item's metadata to seamlessly update the system notification
+                    val currentItem = player.currentMediaItem
+                    if (currentItem != null) {
+                        val updatedItem = currentItem.buildUpon()
+                            .setMediaMetadata(updatedMetadata)
+                            .build()
+                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
+                    }
                 }
             }
         }
