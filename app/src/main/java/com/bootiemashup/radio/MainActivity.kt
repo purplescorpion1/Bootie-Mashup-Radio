@@ -35,6 +35,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var ivArtwork: ImageView
     private lateinit var tvTrackTitle: TextView
+    private lateinit var tvNextTrackLabel: TextView
+    private lateinit var tvNextTrack: TextView
     private lateinit var btnPlayPause: ImageButton
     private lateinit var btnMute: ImageButton
     private lateinit var mediaRouteButton: MediaRouteButton
@@ -48,12 +50,11 @@ class MainActivity : AppCompatActivity() {
         // Bind Views
         ivArtwork = findViewById(R.id.ivArtwork)
         tvTrackTitle = findViewById(R.id.tvTrackTitle)
+        tvNextTrackLabel = findViewById(R.id.tvNextTrackLabel)
+        tvNextTrack = findViewById(R.id.tvNextTrack)
         btnPlayPause = findViewById(R.id.btnPlayPause)
         btnMute = findViewById(R.id.btnMute)
         mediaRouteButton = findViewById(R.id.mediaRouteButton)
-
-        // Enable marquee scrolling on track title
-        tvTrackTitle.isSelected = true
 
         // Configure MediaRouteButton for standard Bluetooth / audio routing
         val mediaRouteSelector = MediaRouteSelector.Builder()
@@ -223,13 +224,31 @@ class MainActivity : AppCompatActivity() {
         }
         tvTrackTitle.text = displayText
 
-        // Update Album Artwork using Glide
+        // Update Coming Next Track Info
+        val nextTrack = metadata.extras?.getString("next_track") ?: ""
+        if (nextTrack.isNotEmpty()) {
+            tvNextTrackLabel.visibility = View.VISIBLE
+            tvNextTrack.visibility = View.VISIBLE
+            tvNextTrack.text = nextTrack
+        } else {
+            tvNextTrackLabel.visibility = View.GONE
+            tvNextTrack.visibility = View.GONE
+        }
+
+        // Update Album Artwork using Glide without placeholder flashing
         val artworkUri = metadata.artworkUri
-        Glide.with(this@MainActivity)
+
+        val requestBuilder = Glide.with(this@MainActivity)
             .load(artworkUri ?: "https://c7.radioboss.fm/w/artwork/205.jpg")
-            .placeholder(R.mipmap.ic_launcher_round)
             .error(R.mipmap.ic_launcher_round)
-            .into(ivArtwork)
+
+        if (ivArtwork.drawable != null) {
+            requestBuilder.placeholder(ivArtwork.drawable)
+        } else {
+            requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+        }
+
+        requestBuilder.into(ivArtwork)
     }
 
     private fun isAndroidTV(): Boolean {

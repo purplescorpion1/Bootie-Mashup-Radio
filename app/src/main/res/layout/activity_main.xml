@@ -92,13 +92,43 @@
             android:shadowDx="2"
             android:shadowDy="2"
             android:shadowRadius="4"
-            android:ellipsize="marquee"
-            android:singleLine="true"
-            android:marqueeRepeatLimit="marquee_forever"
-            android:scrollHorizontally="true"
             android:layout_marginLeft="16dp"
             android:layout_marginRight="16dp"
-            android:layout_marginBottom="24dp" />
+            android:layout_marginBottom="16dp" />
+
+        <!-- Dynamic Next Playing Text -->
+        <TextView
+            android:id="@+id/tvNextTrackLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="COMING NEXT"
+            android:textColor="@color/white_translucent"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.1"
+            android:shadowColor="@color/text_shadow_color"
+            android:shadowDx="2"
+            android:shadowDy="2"
+            android:shadowRadius="3"
+            android:layout_marginBottom="4dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvNextTrack"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:gravity="center"
+            android:shadowColor="@color/text_shadow_color"
+            android:shadowDx="2"
+            android:shadowDy="2"
+            android:shadowRadius="4"
+            android:layout_marginLeft="16dp"
+            android:layout_marginRight="16dp"
+            android:layout_marginBottom="24dp"
+            android:visibility="gone" />
 
         <!-- Spacer to push the control buttons on top of or below decks -->
         <View
@@ -112,7 +142,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center"
-            android:background="#90000000"
+            android:background="@android:color/transparent"
             android:paddingHorizontal="24dp"
             android:paddingVertical="12dp"
             android:layout_marginBottom="16dp">
