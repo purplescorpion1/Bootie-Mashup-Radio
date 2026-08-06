@@ -10,4 +10,6 @@
 <img src="/Preview/BM_Radio_2.0_TV.png" alt="drawing" width="500"/>
 
 <h3>Download The App</h3>
-[Releases](https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases)
+<p>
+[https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases](https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases)
+</p>
