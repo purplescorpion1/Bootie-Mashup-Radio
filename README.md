@@ -11,5 +11,5 @@
 
 <h3>Download The App</h3>
 <p>
-[https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases](https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases)
+https://github.com/purplescorpion1/Bootie-Mashup-Radio/releases
 </p>
