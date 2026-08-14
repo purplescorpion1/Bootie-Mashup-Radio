@@ -46,6 +46,7 @@ dependencies {
     implementation "androidx.media3:media3-exoplayer:$media3_version"
     implementation "androidx.media3:media3-session:$media3_version"
     implementation "androidx.media3:media3-ui:$media3_version"
+    implementation "androidx.media3:media3-datasource-okhttp:$media3_version"
 
     // MediaRouter for routing/bluetooth dialog (Standard MediaRouter and Cast buttons)
     implementation 'androidx.mediarouter:mediarouter:1.8.1'

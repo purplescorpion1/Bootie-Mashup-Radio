@@ -14,7 +14,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
@@ -23,6 +25,11 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -41,7 +49,34 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
-    private val okHttpClient = OkHttpClient()
+    private val okHttpClient: OkHttpClient by lazy {
+        val trustAllCerts = arrayOf<TrustManager>(
+            object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+        )
+
+        val sslContext = SSLContext.getInstance("SSL").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+
+        val headerInterceptor = Interceptor { chain ->
+            val originalRequest = chain.request()
+            val requestWithHeaders = originalRequest.newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
+                .header("Referer", "https://c7.radioboss.fm/")
+                .build()
+            chain.proceed(requestWithHeaders)
+        }
+
+        OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .addInterceptor(headerInterceptor)
+            .build()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -53,9 +88,14 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        // Create player with track selector
+        val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(okHttpDataSourceFactory)
+
+        // Create player with track selector and okhttp media source factory
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
+            .setMediaSourceFactory(mediaSourceFactory)
             .build()
 
         // Handle audio focus automatically
