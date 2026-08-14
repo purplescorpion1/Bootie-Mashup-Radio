@@ -204,7 +204,7 @@ class PlaybackService : MediaSessionService() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                delay(10000) // Poll every 10 seconds
+                delay(5000) // Poll every 5 seconds
             }
         }
     }
@@ -218,10 +218,23 @@ class PlaybackService : MediaSessionService() {
             if (response.isSuccessful) {
                 val jsonStr = response.body?.string() ?: ""
                 val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "Bootie Mashup Radio")
-                val artist = json.optString("currenttrack_artist", "Bootie Mashup Radio")
-                val title = json.optString("currenttrack_title", "Live Stream")
+                val nowPlaying = json.optString("nowplaying", "")
+                var artist = json.optString("currenttrack_artist", "")
+                var title = json.optString("currenttrack_title", "")
                 val nextTrack = json.optString("nexttrack", "")
+
+                if (artist.isBlank() || title.isBlank()) {
+                    if (nowPlaying.contains(" - ")) {
+                        val parts = nowPlaying.split(" - ", limit = 2)
+                        if (artist.isBlank()) artist = parts[0].trim()
+                        if (title.isBlank()) title = parts[1].trim()
+                    } else {
+                        if (title.isBlank()) title = if (nowPlaying.isNotBlank()) nowPlaying else "Live Stream"
+                        if (artist.isBlank()) artist = "Bootie Mashup Radio"
+                    }
+                }
+
+                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else "$artist - $title"
 
                 withContext(Dispatchers.Main) {
                     val artworkUri = Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis())
@@ -235,7 +248,7 @@ class PlaybackService : MediaSessionService() {
                         .setArtist(artist)
                         .setAlbumTitle("Bootie Mashup Radio")
                         .setArtworkUri(artworkUri)
-                        .setDisplayTitle(nowPlaying)
+                        .setDisplayTitle(displayTitle)
                         .setExtras(extras)
                         .build()
 
