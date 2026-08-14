@@ -49,33 +49,36 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
-    private val okHttpClient: OkHttpClient by lazy {
-        val trustAllCerts = arrayOf<TrustManager>(
-            object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+    companion object {
+        val okHttpClient: OkHttpClient by lazy {
+            val trustAllCerts = arrayOf<TrustManager>(
+                object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }
+            )
+
+            val sslContext = SSLContext.getInstance("SSL").apply {
+                init(null, trustAllCerts, SecureRandom())
             }
-        )
 
-        val sslContext = SSLContext.getInstance("SSL").apply {
-            init(null, trustAllCerts, SecureRandom())
-        }
+            val headerInterceptor = Interceptor { chain ->
+                val originalRequest = chain.request()
+                val requestWithHeaders = originalRequest.newBuilder()
+                    .header("Origin", "https://bootiemashup.com")
+                    .header("Referer", "https://bootiemashup.com/")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
+                    .build()
+                chain.proceed(requestWithHeaders)
+            }
 
-        val headerInterceptor = Interceptor { chain ->
-            val originalRequest = chain.request()
-            val requestWithHeaders = originalRequest.newBuilder()
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
-                .header("Referer", "https://c7.radioboss.fm/")
+            OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .addInterceptor(headerInterceptor)
                 .build()
-            chain.proceed(requestWithHeaders)
         }
-
-        OkHttpClient.Builder()
-            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
-            .addInterceptor(headerInterceptor)
-            .build()
     }
 
     override fun onCreate() {
@@ -211,7 +214,7 @@ class PlaybackService : MediaSessionService() {
 
     private suspend fun fetchAndUpdateMetadata() {
         val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205&nl=1")
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
