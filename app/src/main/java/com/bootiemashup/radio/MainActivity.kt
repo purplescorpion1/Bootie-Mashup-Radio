@@ -299,15 +299,14 @@ class MainActivity : AppCompatActivity() {
             tvTrackTitle.text = displayText
         }
 
-        // Update Coming Next Track Info without hiding if temporarily omitted
+        // Update Coming Next Track Info: fallback to 'Bootie Mashup Radio' if empty
         val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
+        tvNextTrackLabel.visibility = View.VISIBLE
+        tvNextTrack.visibility = View.VISIBLE
         if (nextTrack.isNotEmpty()) {
-            tvNextTrackLabel.visibility = View.VISIBLE
-            tvNextTrack.visibility = View.VISIBLE
             tvNextTrack.text = nextTrack
-        } else if (tvNextTrack.text.isNotEmpty()) {
-            tvNextTrackLabel.visibility = View.VISIBLE
-            tvNextTrack.visibility = View.VISIBLE
+        } else {
+            tvNextTrack.text = "Bootie Mashup Radio"
         }
 
         // Update Album Artwork using Glide without placeholder flashing
@@ -399,13 +398,12 @@ class MainActivity : AppCompatActivity() {
                                     tvTrackTitle.text = displayText
                                 }
 
+                                tvNextTrackLabel.visibility = View.VISIBLE
+                                tvNextTrack.visibility = View.VISIBLE
                                 if (nextTrack.isNotEmpty()) {
-                                    tvNextTrackLabel.visibility = View.VISIBLE
-                                    tvNextTrack.visibility = View.VISIBLE
                                     tvNextTrack.text = nextTrack
-                                } else if (tvNextTrack.text.isNotEmpty()) {
-                                    tvNextTrackLabel.visibility = View.VISIBLE
-                                    tvNextTrack.visibility = View.VISIBLE
+                                } else {
+                                    tvNextTrack.text = "Bootie Mashup Radio"
                                 }
 
                                 loadAlbumArtwork(artworkBaseUrl)
