@@ -27,12 +27,13 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
-import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import java.security.SecureRandom
@@ -164,14 +165,9 @@ class PlaybackService : MediaSessionService() {
             .setCallback(CustomCallback())
             .build()
 
-        // Configure Media3 DefaultMediaNotificationProvider
+        // Configure CustomMediaNotificationProvider
         createNotificationChannel()
-        val defaultNotificationProvider = DefaultMediaNotificationProvider.Builder(this)
-            .setChannelId(CHANNEL_ID)
-            .build().apply {
-                setSmallIcon(R.mipmap.ic_launcher)
-            }
-        setMediaNotificationProvider(defaultNotificationProvider)
+        setMediaNotificationProvider(CustomMediaNotificationProvider())
 
         // Start Foreground Notification immediately to prevent ForegroundServiceDidNotStartInTimeException
         startForegroundNotification()
@@ -231,7 +227,7 @@ class PlaybackService : MediaSessionService() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Bootie Radio Playback",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Background audio streaming for Bootie Mashup Radio"
                 setShowBadge(false)
@@ -243,93 +239,116 @@ class PlaybackService : MediaSessionService() {
 
     private fun startForegroundNotification() {
         createNotificationChannel()
-
-        val intent = Intent(applicationContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        try {
+            triggerNotificationUpdate()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        val pendingIntent = PendingIntent.getActivity(
-            applicationContext,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+    }
 
-        val trackTitle = currentPolledMetadata?.title?.toString()
-        val artistName = currentPolledMetadata?.artist?.toString()
-
-        val displayTitle = if (!trackTitle.isNullOrBlank()) trackTitle else (currentPolledMetadata?.displayTitle?.toString() ?: "Bootie Mashup Radio")
-        val displayArtist = if (!artistName.isNullOrBlank()) artistName else "Live Stream"
-
-        val playPauseIntent = Intent(applicationContext, PlaybackService::class.java).apply {
-            action = "ACTION_TOGGLE_PLAY_PAUSE"
-        }
-        val playPausePendingIntent = PendingIntent.getService(
-            applicationContext,
-            101,
-            playPauseIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val muteIntent = Intent(applicationContext, PlaybackService::class.java).apply {
-            action = "ACTION_TOGGLE_MUTE"
-        }
-        val mutePendingIntent = PendingIntent.getService(
-            applicationContext,
-            102,
-            muteIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
-
-        val playPauseIcon = if (isPlaying) R.drawable.ic_pause_white_24dp else R.drawable.ic_play_arrow_white_24dp
-        val playPauseTitle = if (isPlaying) "Pause" else "Play"
-
-        val muteIcon = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
-        val muteTitle = if (isMuted) "Unmute" else "Mute"
-
-        val playPauseAction = NotificationCompat.Action.Builder(
-            playPauseIcon,
-            playPauseTitle,
-            playPausePendingIntent
-        ).build()
-
-        val muteAction = NotificationCompat.Action.Builder(
-            muteIcon,
-            muteTitle,
-            mutePendingIntent
-        ).build()
-
-        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(displayTitle)
-            .setContentText(displayArtist)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(playPauseAction)
-            .addAction(muteAction)
-
-        currentArtworkBitmap?.let {
-            notificationBuilder.setLargeIcon(it)
-        }
-
-        mediaSession?.let { session ->
-            notificationBuilder.setStyle(
-                MediaStyleNotificationHelper.MediaStyle(session)
-                    .setShowActionsInCompactView(0, 1)
+    private inner class CustomMediaNotificationProvider : MediaNotification.Provider {
+        override fun createNotification(
+            mediaSession: MediaSession,
+            customLayout: ImmutableList<CommandButton>,
+            actionFactory: MediaNotification.ActionFactory,
+            onNotificationChangedListener: MediaNotification.Provider.Callback
+        ): MediaNotification {
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                applicationContext,
+                0,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
+
+            val trackTitle = currentPolledMetadata?.title?.toString()
+            val artistName = currentPolledMetadata?.artist?.toString()
+            val rawNowPlaying = currentPolledMetadata?.displayTitle?.toString()
+
+            val displayTitle = when {
+                !trackTitle.isNullOrBlank() -> trackTitle
+                !rawNowPlaying.isNullOrBlank() -> rawNowPlaying
+                else -> "Bootie Mashup Radio"
+            }
+            val displayArtist = if (!artistName.isNullOrBlank()) artistName else "Live Stream"
+
+            val playPauseIntent = Intent(applicationContext, PlaybackService::class.java).apply {
+                action = "ACTION_TOGGLE_PLAY_PAUSE"
+            }
+            val playPausePendingIntent = PendingIntent.getService(
+                applicationContext,
+                101,
+                playPauseIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val muteIntent = Intent(applicationContext, PlaybackService::class.java).apply {
+                action = "ACTION_TOGGLE_MUTE"
+            }
+            val mutePendingIntent = PendingIntent.getService(
+                applicationContext,
+                102,
+                muteIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
+
+            val playPauseIcon = if (isPlaying) R.drawable.ic_pause_white_24dp else R.drawable.ic_play_arrow_white_24dp
+            val playPauseTitle = if (isPlaying) "Pause" else "Play"
+
+            val muteIcon = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
+            val muteTitle = if (isMuted) "Unmute" else "Mute"
+
+            val playPauseAction = NotificationCompat.Action.Builder(
+                playPauseIcon,
+                playPauseTitle,
+                playPausePendingIntent
+            ).build()
+
+            val muteAction = NotificationCompat.Action.Builder(
+                muteIcon,
+                muteTitle,
+                mutePendingIntent
+            ).build()
+
+            val builder = NotificationCompat.Builder(this@PlaybackService, CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(displayTitle)
+                .setContentText(displayArtist)
+                .setSubText("Bootie Mashup Radio")
+                .setContentIntent(pendingIntent)
+                .setOngoing(isPlaying)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .addAction(playPauseAction)
+                .addAction(muteAction)
+                .setStyle(
+                    MediaStyleNotificationHelper.MediaStyle(mediaSession)
+                        .setShowActionsInCompactView(0, 1)
+                )
+
+            currentArtworkBitmap?.let {
+                builder.setLargeIcon(it)
+            }
+
+            return MediaNotification(NOTIFICATION_ID, builder.build())
         }
 
-        val notification = notificationBuilder.build()
+        override fun handleCustomCommand(
+            session: MediaSession,
+            action: String,
+            extras: Bundle
+        ): Boolean {
+            return false
+        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        override fun getNotificationChannelInfo(): MediaNotification.Provider.NotificationChannelInfo {
+            return MediaNotification.Provider.NotificationChannelInfo(CHANNEL_ID, "Bootie Radio Playback")
         }
     }
 
