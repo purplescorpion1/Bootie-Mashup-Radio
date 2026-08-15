@@ -49,6 +49,7 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
+    private var currentPolledMetadata: MediaMetadata? = null
     companion object {
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -99,7 +100,9 @@ class PlaybackService : MediaSessionService() {
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)
-            .build()
+            .build().apply {
+                setWakeMode(C.WAKE_MODE_NETWORK)
+            }
 
         // Handle audio focus automatically
         val audioAttributes = AudioAttributes.Builder()
@@ -129,7 +132,9 @@ class PlaybackService : MediaSessionService() {
 
         // Create PendingIntent to launch MainActivity when the notification is tapped
         val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -144,7 +149,7 @@ class PlaybackService : MediaSessionService() {
             .setCallback(CustomCallback())
             .build()
 
-        // Register player listener for toast messages on status changes
+        // Register player listener for toast messages on status changes and metadata persistence
         player.addListener(object : Player.Listener {
             private var lastState: Boolean? = null
 
@@ -155,6 +160,15 @@ class PlaybackService : MediaSessionService() {
                         showToast("Audio Playing")
                     } else {
                         showToast("Audio Paused")
+                    }
+                }
+            }
+
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                // Ensure stream ICY metadata does not overwrite polled metadata
+                currentPolledMetadata?.let { polled ->
+                    if (player.playlistMetadata != polled) {
+                        player.playlistMetadata = polled
                     }
                 }
             }
@@ -247,24 +261,16 @@ class PlaybackService : MediaSessionService() {
                     }
 
                     val updatedMetadata = MediaMetadata.Builder()
-                        .setTitle(title)
-                        .setArtist(artist)
+                        .setTitle(if (title.isNotBlank()) title else displayTitle)
+                        .setArtist(if (artist.isNotBlank()) artist else "Bootie Mashup Radio")
                         .setAlbumTitle("Bootie Mashup Radio")
                         .setArtworkUri(artworkUri)
                         .setDisplayTitle(displayTitle)
                         .setExtras(extras)
                         .build()
 
-                    player.setPlaylistMetadata(updatedMetadata)
-
-                    // Also update the current media item's metadata to seamlessly update the system notification
-                    val currentItem = player.currentMediaItem
-                    if (currentItem != null) {
-                        val updatedItem = currentItem.buildUpon()
-                            .setMediaMetadata(updatedMetadata)
-                            .build()
-                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
-                    }
+                    currentPolledMetadata = updatedMetadata
+                    player.playlistMetadata = updatedMetadata
                 }
             }
         }
@@ -294,9 +300,13 @@ class PlaybackService : MediaSessionService() {
             val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
                 .add(SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY))
                 .build()
+            val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
+                .add(Player.COMMAND_SET_VOLUME)
+                .add(Player.COMMAND_GET_VOLUME)
+                .build()
             return MediaSession.ConnectionResult.accept(
                 availableSessionCommands,
-                connectionResult.availablePlayerCommands
+                availablePlayerCommands
             )
         }
 

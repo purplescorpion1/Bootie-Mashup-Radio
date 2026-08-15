@@ -112,7 +112,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Connect to Media3 Session
+        // Start foreground service and connect to Media3 Session
+        try {
+            val serviceIntent = Intent(this, PlaybackService::class.java)
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         connectToMediaSession()
     }
 
@@ -143,7 +149,15 @@ class MainActivity : AppCompatActivity() {
         // Listen for playback and metadata changes from session
         controller.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                updatePlayPauseUI(isPlaying)
+                updatePlayPauseUI(controller.playWhenReady)
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                updatePlayPauseUI(playWhenReady)
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onVolumeChanged(volume: Float) {
@@ -153,10 +167,14 @@ class MainActivity : AppCompatActivity() {
             override fun onPlaylistMetadataChanged(metadata: MediaMetadata) {
                 updateTrackMetadataUI(metadata)
             }
+
+            override fun onMediaMetadataChanged(metadata: MediaMetadata) {
+                updateTrackMetadataUI(controller.playlistMetadata)
+            }
         })
 
         // Initial UI sync
-        updatePlayPauseUI(controller.isPlaying)
+        updatePlayPauseUI(controller.playWhenReady)
         updateMuteUI(controller.volume == 0f)
         updateTrackMetadataUI(controller.playlistMetadata)
     }
@@ -171,9 +189,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePlayback() {
         val controller = mediaController ?: return
-        if (controller.isPlaying) {
+        if (controller.playWhenReady) {
             controller.pause()
         } else {
+            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
+                controller.prepare()
+            }
             controller.play()
         }
     }
@@ -187,6 +208,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             controller.volume = 0f
             updateMuteUI(true)
+        }
+        // Also trigger service custom action for complete sync
+        try {
+            controller.sendCustomCommand(
+                androidx.media3.session.SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -210,11 +240,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateTrackMetadataUI(metadata: MediaMetadata) {
+    private fun updateTrackMetadataUI(metadata: MediaMetadata?) {
+        val activeMetadata = if (metadata != null && (!metadata.displayTitle.isNullOrEmpty() || !metadata.title.isNullOrEmpty())) {
+            metadata
+        } else {
+            mediaController?.playlistMetadata ?: metadata
+        } ?: return
+
         // Update Track Title
-        val nowPlaying = metadata.displayTitle?.toString() ?: ""
-        val artist = metadata.artist?.toString() ?: ""
-        val title = metadata.title?.toString() ?: ""
+        val nowPlaying = activeMetadata.displayTitle?.toString() ?: ""
+        val artist = activeMetadata.artist?.toString() ?: ""
+        val title = activeMetadata.title?.toString() ?: ""
 
         val displayText = when {
             nowPlaying.isNotEmpty() -> nowPlaying
@@ -225,7 +261,7 @@ class MainActivity : AppCompatActivity() {
         tvTrackTitle.text = displayText
 
         // Update Coming Next Track Info
-        val nextTrack = metadata.extras?.getString("next_track") ?: ""
+        val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
         if (nextTrack.isNotEmpty()) {
             tvNextTrackLabel.visibility = View.VISIBLE
             tvNextTrack.visibility = View.VISIBLE
@@ -236,7 +272,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Update Album Artwork using Glide without placeholder flashing
-        val artworkUri = metadata.artworkUri
+        val artworkUri = activeMetadata.artworkUri
 
         val requestBuilder = Glide.with(this@MainActivity)
             .load(artworkUri ?: "https://c7.radioboss.fm/w/artwork/205.jpg")
