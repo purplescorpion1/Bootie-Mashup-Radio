@@ -312,11 +312,6 @@ class PlaybackService : MediaSessionService() {
     }
 
     private suspend fun fetchAndUpdateMetadata() {
-        if (!player.playWhenReady) {
-            // Do not update metadata when player is paused or stopped
-            return
-        }
-
         // 1. Fetch artwork URL from cover.js
         var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
         try {
@@ -385,6 +380,7 @@ class PlaybackService : MediaSessionService() {
 
                     currentPolledMetadata = updatedMetadata
                     player.playlistMetadata = updatedMetadata
+                    startForegroundNotification()
                 }
             }
         }

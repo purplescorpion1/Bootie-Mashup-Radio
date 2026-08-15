@@ -25,6 +25,7 @@ import androidx.mediarouter.app.MediaRouteButton
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaRouteButton: MediaRouteButton
 
     private var doubleBackToExitPressedOnce = false
+    private var uiPollingJob: Job? = null
+    private var lastUiNowPlaying: String = ""
+    private var lastUiNextTrack: String = ""
+    private var lastUiArtworkUrl: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -131,8 +136,19 @@ class MainActivity : AppCompatActivity() {
         connectToMediaSession()
     }
 
+    override fun onResume() {
+        super.onResume()
+        startUiPolling()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopUiPolling()
+    }
+
     override fun onStop() {
         super.onStop()
+        stopUiPolling()
         // Release MediaController connection
         releaseMediaController()
     }
@@ -294,6 +310,8 @@ class MainActivity : AppCompatActivity() {
         if (artworkUri != null) {
             val requestBuilder = Glide.with(this@MainActivity)
                 .load(artworkUri)
+                .diskCacheStrategy(DiskCacheStrategy.NONE)
+                .skipMemoryCache(true)
                 .error(R.mipmap.ic_launcher_round)
 
             if (ivArtwork.drawable != null) {
@@ -306,6 +324,100 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun startUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                try {
+                    // 1. Fetch artwork URL from cover.js
+                    var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+                    try {
+                        val coverRequest = Request.Builder()
+                            .url("https://c7.radioboss.fm/w/cover.js?u=205")
+                            .build()
+                        PlaybackService.okHttpClient.newCall(coverRequest).execute().use { response ->
+                            if (response.isSuccessful) {
+                                val jsContent = response.body?.string() ?: ""
+                                val regex = Regex("https?://[^'\"\\s]+\\.jpg", RegexOption.IGNORE_CASE)
+                                val match = regex.find(jsContent)
+                                if (match != null) {
+                                    artworkBaseUrl = match.value
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    // 2. Fetch now playing info from nowplayinginfo
+                    val request = Request.Builder()
+                        .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+                        .build()
+
+                    PlaybackService.okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val jsonStr = response.body?.string() ?: ""
+                            val json = JSONObject(jsonStr)
+                            val nowPlaying = json.optString("nowplaying", "").trim()
+                            var artist = json.optString("currenttrack_artist", "").trim()
+                            var title = json.optString("currenttrack_title", "").trim()
+                            val nextTrack = json.optString("nexttrack", "").trim()
+
+                            if (artist.isBlank() || title.isBlank()) {
+                                if (nowPlaying.contains(" - ")) {
+                                    val parts = nowPlaying.split(" - ", limit = 2)
+                                    if (artist.isBlank()) artist = parts[0].trim()
+                                    if (title.isBlank()) title = parts[1].trim()
+                                } else {
+                                    if (title.isBlank()) title = nowPlaying
+                                }
+                            }
+
+                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
+
+                            withContext(Dispatchers.Main) {
+                                if (displayText.isNotEmpty()) {
+                                    tvTrackTitle.text = displayText
+                                }
+
+                                if (nextTrack.isNotEmpty()) {
+                                    tvNextTrackLabel.visibility = View.VISIBLE
+                                    tvNextTrack.visibility = View.VISIBLE
+                                    tvNextTrack.text = nextTrack
+                                } else {
+                                    tvNextTrackLabel.visibility = View.GONE
+                                    tvNextTrack.visibility = View.GONE
+                                }
+
+                                val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
+                                val requestBuilder = Glide.with(this@MainActivity)
+                                    .load(artworkUrl)
+                                    .diskCacheStrategy(DiskCacheStrategy.NONE)
+                                    .skipMemoryCache(true)
+                                    .error(R.mipmap.ic_launcher_round)
+
+                                if (ivArtwork.drawable != null) {
+                                    requestBuilder.placeholder(ivArtwork.drawable)
+                                } else {
+                                    requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+                                }
+
+                                requestBuilder.into(ivArtwork)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    private fun stopUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = null
+    }
 
     private fun isAndroidTV(): Boolean {
         val pm = packageManager
