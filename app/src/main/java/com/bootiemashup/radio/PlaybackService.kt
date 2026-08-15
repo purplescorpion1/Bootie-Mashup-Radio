@@ -217,11 +217,6 @@ class PlaybackService : MediaSessionService() {
         return super.onStartCommand(intent, flags, startId)
     }
 
-    override fun onUpdateNotification(session: MediaSession, startInForeground: Boolean) {
-        super.onUpdateNotification(session, startInForeground)
-        startForegroundNotification()
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
