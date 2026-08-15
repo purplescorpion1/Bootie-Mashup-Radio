@@ -335,18 +335,28 @@ class PlaybackService : MediaSessionService() {
                     Intent(context, PlaybackService::class.java).apply { action = "ACTION_TOGGLE_MUTE" },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
-                val iconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
-                val title = if (isMuted) "Unmute" else "Mute"
-                val action = NotificationCompat.Action.Builder(iconRes, title, mutePendingIntent).build()
-                return mapOf("ACTION_TOGGLE_MUTE" to action)
+                val muteAction = NotificationCompat.Action.Builder(
+                    R.drawable.ic_volume_up_white_24dp,
+                    "Mute",
+                    mutePendingIntent
+                ).build()
+                val unmuteAction = NotificationCompat.Action.Builder(
+                    R.drawable.ic_volume_off_white_24dp,
+                    "Unmute",
+                    mutePendingIntent
+                ).build()
+                return mapOf(
+                    "ACTION_MUTE" to muteAction,
+                    "ACTION_UNMUTE" to unmuteAction
+                )
             }
 
             override fun getCustomActions(player: Player): List<String> {
-                return listOf("ACTION_TOGGLE_MUTE")
+                return listOf(if (isMuted) "ACTION_UNMUTE" else "ACTION_MUTE")
             }
 
             override fun onCustomAction(player: Player, action: String, intent: Intent) {
-                if (action == "ACTION_TOGGLE_MUTE") {
+                if (action == "ACTION_MUTE" || action == "ACTION_UNMUTE" || action == "ACTION_TOGGLE_MUTE") {
                     toggleMute()
                 }
             }
