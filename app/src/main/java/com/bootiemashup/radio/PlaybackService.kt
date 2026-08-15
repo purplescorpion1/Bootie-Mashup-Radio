@@ -347,19 +347,39 @@ class PlaybackService : MediaSessionService() {
 
                 val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
-                val artworkUri = Uri.parse("$artworkBaseUrl?_=" + System.currentTimeMillis())
+                val timestampedArtworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
+                val artworkUri = Uri.parse(timestampedArtworkUrl)
+
+                var artworkBytes: ByteArray? = null
+                try {
+                    val artworkRequest = Request.Builder()
+                        .url(timestampedArtworkUrl)
+                        .build()
+                    okHttpClient.newCall(artworkRequest).execute().use { artworkResponse ->
+                        if (artworkResponse.isSuccessful) {
+                            artworkBytes = artworkResponse.body?.bytes()
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
 
                 val extras = Bundle().apply {
                     putString("next_track", nextTrack)
                 }
 
-                val updatedMetadata = MediaMetadata.Builder()
+                val metadataBuilder = MediaMetadata.Builder()
                     .setTitle(if (title.isNotBlank()) title else displayTitle)
                     .setArtist(artist)
                     .setArtworkUri(artworkUri)
                     .setDisplayTitle(displayTitle)
                     .setExtras(extras)
-                    .build()
+
+                if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
+                    metadataBuilder.setArtworkData(artworkBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                }
+
+                val updatedMetadata = metadataBuilder.build()
 
                 currentPolledMetadata = updatedMetadata
 
