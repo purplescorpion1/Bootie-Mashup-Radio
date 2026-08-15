@@ -29,6 +29,8 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.common.util.BitmapLoader
+import android.support.v4.media.session.MediaSessionCompat
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -37,6 +39,7 @@ import androidx.media3.session.SessionResult
 import androidx.media3.ui.PlayerNotificationManager
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -67,6 +70,50 @@ class PlaybackService : MediaSessionService() {
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
     private var lastArtworkUrl: String = ""
+
+    private val okHttpBitmapLoader = object : BitmapLoader {
+        override fun supportsMimeType(mimeType: String): Boolean {
+            return true
+        }
+
+        override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+            return try {
+                val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                if (bitmap != null) {
+                    Futures.immediateFuture(bitmap)
+                } else {
+                    Futures.immediateFailedFuture(IllegalArgumentException("Failed to decode bitmap bytes"))
+                }
+            } catch (e: Exception) {
+                Futures.immediateFailedFuture(e)
+            }
+        }
+
+        override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+            val future = SettableFuture.create<Bitmap>()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val request = Request.Builder().url(uri.toString()).build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bytes = response.body?.bytes()
+                            if (bytes != null && bytes.isNotEmpty()) {
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                if (bitmap != null) {
+                                    future.set(bitmap)
+                                    return@launch
+                                }
+                            }
+                        }
+                    }
+                    future.setException(IllegalStateException("Failed to load artwork from $uri"))
+                } catch (e: Exception) {
+                    future.setException(e)
+                }
+            }
+            return future
+        }
+    }
 
     companion object {
         val okHttpClient: OkHttpClient by lazy {
@@ -161,9 +208,10 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create MediaSession with session activity configured BEFORE preparing/playing player
+        // Create MediaSession with session activity and okHttpBitmapLoader configured BEFORE preparing/playing player
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(pendingIntent)
+            .setBitmapLoader(okHttpBitmapLoader)
             .setCallback(CustomCallback())
             .build()
 
@@ -234,15 +282,11 @@ class PlaybackService : MediaSessionService() {
     private fun setupPlayerNotificationManager() {
         val descriptionAdapter = object : PlayerNotificationManager.MediaDescriptionAdapter {
             override fun getCurrentContentTitle(player: Player): CharSequence {
-                val polledDisplayTitle = currentPolledMetadata?.displayTitle?.toString()
                 val polledTitle = currentPolledMetadata?.title?.toString()
-                val mediaDisplayTitle = player.mediaMetadata.displayTitle?.toString()
                 val mediaTitle = player.mediaMetadata.title?.toString()
 
                 return when {
-                    !polledDisplayTitle.isNullOrBlank() -> polledDisplayTitle
                     !polledTitle.isNullOrBlank() -> polledTitle
-                    !mediaDisplayTitle.isNullOrBlank() -> mediaDisplayTitle
                     !mediaTitle.isNullOrBlank() -> mediaTitle
                     else -> "Bootie Mashup Radio"
                 }
