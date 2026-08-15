@@ -51,6 +51,8 @@ class PlaybackService : MediaSessionService() {
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
     private var lastNowPlaying: String = ""
+    private var lastNextTrack: String = ""
+    private var lastArtworkUrl: String = ""
     companion object {
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -119,11 +121,8 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setMediaItem(mediaItem)
 
-        // Set initial playlist metadata
+        // Set initial playlist metadata without static title fallbacks
         val initialMetadata = MediaMetadata.Builder()
-            .setTitle("Live Stream")
-            .setArtist("Bootie Mashup Radio")
-            .setAlbumTitle("Bootie Mashup Radio")
             .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
             .build()
         player.setPlaylistMetadata(initialMetadata)
@@ -238,12 +237,35 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun extractArtworkUrlFromJs(jsContent: String): String {
+        val regex = Regex("url\\s*=\\s*['\"]([^'\"]+)['\"]")
+        val match = regex.find(jsContent)
+        return match?.groupValues?.get(1) ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
+    }
+
     private suspend fun fetchAndUpdateMetadata() {
         if (!player.playWhenReady) {
             // Do not update metadata when player is paused or stopped
             return
         }
 
+        // 1. Fetch artwork URL from cover.js
+        var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+        try {
+            val coverRequest = Request.Builder()
+                .url("https://c7.radioboss.fm/w/cover.js?u=205")
+                .build()
+            okHttpClient.newCall(coverRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    val jsContent = response.body?.string() ?: ""
+                    artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Fetch now playing info from nowplayinginfo
         val request = Request.Builder()
             .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
             .build()
@@ -257,14 +279,14 @@ class PlaybackService : MediaSessionService() {
                 var title = json.optString("currenttrack_title", "").trim()
                 val nextTrack = json.optString("nexttrack", "").trim()
 
-                // Only update when nowplaying track actually changes!
-                if (nowPlaying.isNotBlank() && nowPlaying == lastNowPlaying) {
+                // Only update when details actually change!
+                if (nowPlaying == lastNowPlaying && nextTrack == lastNextTrack && artworkBaseUrl == lastArtworkUrl) {
                     return@use
                 }
 
-                if (nowPlaying.isNotBlank()) {
-                    lastNowPlaying = nowPlaying
-                }
+                lastNowPlaying = nowPlaying
+                lastNextTrack = nextTrack
+                lastArtworkUrl = artworkBaseUrl
 
                 if (artist.isBlank() || title.isBlank()) {
                     if (nowPlaying.contains(" - ")) {
@@ -272,15 +294,14 @@ class PlaybackService : MediaSessionService() {
                         if (artist.isBlank()) artist = parts[0].trim()
                         if (title.isBlank()) title = parts[1].trim()
                     } else {
-                        if (title.isBlank()) title = if (nowPlaying.isNotBlank()) nowPlaying else "Live Stream"
-                        if (artist.isBlank()) artist = "Bootie Mashup Radio"
+                        if (title.isBlank()) title = nowPlaying
                     }
                 }
 
-                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else "$artist - $title"
+                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
                 withContext(Dispatchers.Main) {
-                    val artworkUri = Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis())
+                    val artworkUri = Uri.parse("$artworkBaseUrl?_=" + System.currentTimeMillis())
 
                     val extras = Bundle().apply {
                         putString("next_track", nextTrack)
@@ -288,8 +309,7 @@ class PlaybackService : MediaSessionService() {
 
                     val updatedMetadata = MediaMetadata.Builder()
                         .setTitle(if (title.isNotBlank()) title else displayTitle)
-                        .setArtist(if (artist.isNotBlank()) artist else "Bootie Mashup Radio")
-                        .setAlbumTitle("Bootie Mashup Radio")
+                        .setArtist(artist)
                         .setArtworkUri(artworkUri)
                         .setDisplayTitle(displayTitle)
                         .setExtras(extras)
