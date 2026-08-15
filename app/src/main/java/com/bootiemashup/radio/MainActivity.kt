@@ -363,46 +363,52 @@ class MainActivity : AppCompatActivity() {
                             var title = json.optString("currenttrack_title", "").trim()
                             val nextTrack = json.optString("nexttrack", "").trim()
 
-                            if (artist.isBlank() || title.isBlank()) {
-                                if (nowPlaying.contains(" - ")) {
-                                    val parts = nowPlaying.split(" - ", limit = 2)
-                                    if (artist.isBlank()) artist = parts[0].trim()
-                                    if (title.isBlank()) title = parts[1].trim()
-                                } else {
-                                    if (title.isBlank()) title = nowPlaying
-                                }
-                            }
+                            if (nowPlaying != lastUiNowPlaying || nextTrack != lastUiNextTrack || artworkBaseUrl != lastUiArtworkUrl) {
+                                lastUiNowPlaying = nowPlaying
+                                lastUiNextTrack = nextTrack
+                                lastUiArtworkUrl = artworkBaseUrl
 
-                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
-
-                            withContext(Dispatchers.Main) {
-                                if (displayText.isNotEmpty()) {
-                                    tvTrackTitle.text = displayText
+                                if (artist.isBlank() || title.isBlank()) {
+                                    if (nowPlaying.contains(" - ")) {
+                                        val parts = nowPlaying.split(" - ", limit = 2)
+                                        if (artist.isBlank()) artist = parts[0].trim()
+                                        if (title.isBlank()) title = parts[1].trim()
+                                    } else {
+                                        if (title.isBlank()) title = nowPlaying
+                                    }
                                 }
 
-                                if (nextTrack.isNotEmpty()) {
-                                    tvNextTrackLabel.visibility = View.VISIBLE
-                                    tvNextTrack.visibility = View.VISIBLE
-                                    tvNextTrack.text = nextTrack
-                                } else {
-                                    tvNextTrackLabel.visibility = View.GONE
-                                    tvNextTrack.visibility = View.GONE
+                                val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
+
+                                withContext(Dispatchers.Main) {
+                                    if (displayText.isNotEmpty()) {
+                                        tvTrackTitle.text = displayText
+                                    }
+
+                                    if (nextTrack.isNotEmpty()) {
+                                        tvNextTrackLabel.visibility = View.VISIBLE
+                                        tvNextTrack.visibility = View.VISIBLE
+                                        tvNextTrack.text = nextTrack
+                                    } else {
+                                        tvNextTrackLabel.visibility = View.GONE
+                                        tvNextTrack.visibility = View.GONE
+                                    }
+
+                                    val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
+                                    val requestBuilder = Glide.with(this@MainActivity)
+                                        .load(artworkUrl)
+                                        .diskCacheStrategy(DiskCacheStrategy.NONE)
+                                        .skipMemoryCache(true)
+                                        .error(R.mipmap.ic_launcher_round)
+
+                                    if (ivArtwork.drawable != null) {
+                                        requestBuilder.placeholder(ivArtwork.drawable)
+                                    } else {
+                                        requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+                                    }
+
+                                    requestBuilder.into(ivArtwork)
                                 }
-
-                                val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
-                                val requestBuilder = Glide.with(this@MainActivity)
-                                    .load(artworkUrl)
-                                    .diskCacheStrategy(DiskCacheStrategy.NONE)
-                                    .skipMemoryCache(true)
-                                    .error(R.mipmap.ic_launcher_round)
-
-                                if (ivArtwork.drawable != null) {
-                                    requestBuilder.placeholder(ivArtwork.drawable)
-                                } else {
-                                    requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-                                }
-
-                                requestBuilder.into(ivArtwork)
                             }
                         }
                     }
