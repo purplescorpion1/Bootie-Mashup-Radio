@@ -321,23 +321,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private suspend fun fetchAndUpdateMetadata() {
-        // 1. Fetch artwork URL from cover.js
-        var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-        try {
-            val coverRequest = Request.Builder()
-                .url("https://c7.radioboss.fm/w/cover.js?u=205")
-                .build()
-            okHttpClient.newCall(coverRequest).execute().use { response ->
-                if (response.isSuccessful) {
-                    val jsContent = response.body?.string() ?: ""
-                    artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 2. Fetch now playing info from nowplayinginfo
+        // 1. Fetch now playing info from nowplayinginfo
         val request = Request.Builder()
             .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
             .build()
@@ -351,8 +335,30 @@ class PlaybackService : MediaSessionService() {
                 var title = json.optString("currenttrack_title", "").trim()
                 val nextTrack = json.optString("nexttrack", "").trim()
 
-                // Only update when details actually change!
-                if (nowPlaying == lastNowPlaying && nextTrack == lastNextTrack && artworkBaseUrl == lastArtworkUrl) {
+                val nowPlayingChanged = (nowPlaying != lastNowPlaying)
+
+                if (nowPlayingChanged) {
+                    // Wait 1 second after now playing details update before reloading artwork
+                    delay(1000)
+                }
+
+                // Fetch artwork URL from cover.js
+                var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+                try {
+                    val coverRequest = Request.Builder()
+                        .url("https://c7.radioboss.fm/w/cover.js?u=205")
+                        .build()
+                    okHttpClient.newCall(coverRequest).execute().use { coverResponse ->
+                        if (coverResponse.isSuccessful) {
+                            val jsContent = coverResponse.body?.string() ?: ""
+                            artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
+                if (!nowPlayingChanged && nextTrack == lastNextTrack && artworkBaseUrl == lastArtworkUrl) {
                     return@use
                 }
 
