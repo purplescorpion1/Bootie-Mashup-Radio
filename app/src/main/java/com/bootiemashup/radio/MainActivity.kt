@@ -26,6 +26,8 @@ import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.load.model.LazyHeaders
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -122,6 +124,9 @@ class MainActivity : AppCompatActivity() {
         btnMute.setOnClickListener {
             toggleMute()
         }
+
+        // Immediately load album artwork on app launch
+        loadAlbumArtwork("https://c7.radioboss.fm/w/artwork/205.jpg")
     }
 
     override fun onStart() {
@@ -308,20 +313,39 @@ class MainActivity : AppCompatActivity() {
         // Update Album Artwork using Glide without placeholder flashing
         val artworkUri = activeMetadata.artworkUri
         if (artworkUri != null) {
-            val requestBuilder = Glide.with(this@MainActivity)
-                .load(artworkUri)
-                .diskCacheStrategy(DiskCacheStrategy.NONE)
-                .skipMemoryCache(true)
-                .error(R.mipmap.ic_launcher_round)
-
-            if (ivArtwork.drawable != null) {
-                requestBuilder.placeholder(ivArtwork.drawable)
-            } else {
-                requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-            }
-
-            requestBuilder.into(ivArtwork)
+            loadAlbumArtwork(artworkUri.toString())
         }
+    }
+
+    private fun loadAlbumArtwork(baseUrl: String) {
+        val cacheBustingUrl = if (baseUrl.contains("?")) {
+            "$baseUrl&_=" + System.currentTimeMillis()
+        } else {
+            "$baseUrl?_=" + System.currentTimeMillis()
+        }
+
+        val glideUrl = GlideUrl(
+            cacheBustingUrl,
+            LazyHeaders.Builder()
+                .addHeader("Origin", "https://bootiemashup.com")
+                .addHeader("Referer", "https://bootiemashup.com/")
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
+                .build()
+        )
+
+        val requestBuilder = Glide.with(this@MainActivity)
+            .load(glideUrl)
+            .diskCacheStrategy(DiskCacheStrategy.NONE)
+            .skipMemoryCache(true)
+            .error(R.mipmap.ic_launcher_round)
+
+        if (ivArtwork.drawable != null) {
+            requestBuilder.placeholder(ivArtwork.drawable)
+        } else {
+            requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+        }
+
+        requestBuilder.into(ivArtwork)
     }
 
     private fun startUiPolling() {
@@ -384,20 +408,7 @@ class MainActivity : AppCompatActivity() {
                                     tvNextTrack.visibility = View.VISIBLE
                                 }
 
-                                val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
-                                val requestBuilder = Glide.with(this@MainActivity)
-                                    .load(artworkUrl)
-                                    .diskCacheStrategy(DiskCacheStrategy.NONE)
-                                    .skipMemoryCache(true)
-                                    .error(R.mipmap.ic_launcher_round)
-
-                                if (ivArtwork.drawable != null) {
-                                    requestBuilder.placeholder(ivArtwork.drawable)
-                                } else {
-                                    requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-                                }
-
-                                requestBuilder.into(ivArtwork)
+                                loadAlbumArtwork(artworkBaseUrl)
                             }
                         }
                     }
