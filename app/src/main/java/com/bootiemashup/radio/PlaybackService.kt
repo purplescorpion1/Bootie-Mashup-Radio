@@ -233,7 +233,7 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create ForwardingPlayer so MediaSession delegates getMediaMetadata to currentPolledMetadata
+        // Create ForwardingPlayer so MediaSession delegates getCurrentMediaItem, getMediaMetadata, and getPlaylistMetadata to currentPolledMetadata
         val sessionPlayer = object : ForwardingPlayer(player) {
             override fun addListener(listener: Player.Listener) {
                 sessionListeners.add(listener)
@@ -243,6 +243,18 @@ class PlaybackService : MediaSessionService() {
             override fun removeListener(listener: Player.Listener) {
                 sessionListeners.remove(listener)
                 super.removeListener(listener)
+            }
+
+            override fun getCurrentMediaItem(): MediaItem? {
+                val item = super.getCurrentMediaItem() ?: return null
+                val metadata = currentPolledMetadata ?: return item
+                return item.buildUpon().setMediaMetadata(metadata).build()
+            }
+
+            override fun getMediaItemAt(index: Int): MediaItem {
+                val item = super.getMediaItemAt(index)
+                val metadata = currentPolledMetadata ?: return item
+                return item.buildUpon().setMediaMetadata(metadata).build()
             }
 
             override fun getMediaMetadata(): MediaMetadata {
