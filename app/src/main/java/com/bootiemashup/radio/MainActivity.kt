@@ -24,7 +24,15 @@ import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
+import android.graphics.drawable.Drawable
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DataSource
+import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.load.engine.GlideException
+import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.load.model.LazyHeaders
+import com.bumptech.glide.request.RequestListener
+import com.bumptech.glide.request.target.Target
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -51,7 +59,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaRouteButton: MediaRouteButton
 
     private var doubleBackToExitPressedOnce = false
-    private var uiPollingJob: kotlinx.coroutines.Job? = null
+    private var uiPollingJob: Job? = null
+    private var hasLoadedArtwork = false
     private var lastUiNowPlaying: String = ""
     private var lastUiNextTrack: String = ""
     private var lastUiArtworkUrl: String = ""
@@ -121,6 +130,9 @@ class MainActivity : AppCompatActivity() {
         btnMute.setOnClickListener {
             toggleMute()
         }
+
+        // Immediately load album artwork on app launch
+        loadAlbumArtwork("https://c7.radioboss.fm/w/artwork/205.jpg")
     }
 
     override fun onStart() {
@@ -293,32 +305,71 @@ class MainActivity : AppCompatActivity() {
             tvTrackTitle.text = displayText
         }
 
-        // Update Coming Next Track Info
+        // Update Coming Next Track Info: fallback to 'Bootie Mashup Radio' if empty
         val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
+        tvNextTrackLabel.visibility = View.VISIBLE
+        tvNextTrack.visibility = View.VISIBLE
         if (nextTrack.isNotEmpty()) {
-            tvNextTrackLabel.visibility = View.VISIBLE
-            tvNextTrack.visibility = View.VISIBLE
             tvNextTrack.text = nextTrack
         } else {
-            tvNextTrackLabel.visibility = View.GONE
-            tvNextTrack.visibility = View.GONE
+            tvNextTrack.text = "Bootie Mashup Radio"
         }
 
         // Update Album Artwork using Glide without placeholder flashing
         val artworkUri = activeMetadata.artworkUri
         if (artworkUri != null) {
-            val requestBuilder = Glide.with(this@MainActivity)
-                .load(artworkUri)
-                .error(R.mipmap.ic_launcher_round)
-
-            if (ivArtwork.drawable != null) {
-                requestBuilder.placeholder(ivArtwork.drawable)
-            } else {
-                requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-            }
-
-            requestBuilder.into(ivArtwork)
+            loadAlbumArtwork(artworkUri.toString())
         }
+    }
+
+    private fun loadAlbumArtwork(baseUrl: String) {
+        val cacheBustingUrl = if (baseUrl.contains("?")) {
+            "$baseUrl&_=" + System.currentTimeMillis()
+        } else {
+            "$baseUrl?_=" + System.currentTimeMillis()
+        }
+
+        val glideUrl = GlideUrl(
+            cacheBustingUrl,
+            LazyHeaders.Builder()
+                .addHeader("Origin", "https://bootiemashup.com")
+                .addHeader("Referer", "https://bootiemashup.com/")
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
+                .build()
+        )
+
+        val requestBuilder = Glide.with(this@MainActivity)
+            .load(glideUrl)
+            .diskCacheStrategy(DiskCacheStrategy.NONE)
+            .skipMemoryCache(true)
+            .error(R.mipmap.ic_launcher_round)
+            .listener(object : RequestListener<Drawable> {
+                override fun onLoadFailed(
+                    e: GlideException?,
+                    model: Any?,
+                    target: Target<Drawable>,
+                    isFirstResource: Boolean
+                ): Boolean {
+                    return false
+                }
+
+                override fun onResourceReady(
+                    resource: Drawable,
+                    model: Any,
+                    target: Target<Drawable>?,
+                    dataSource: DataSource,
+                    isFirstResource: Boolean
+                ): Boolean {
+                    hasLoadedArtwork = true
+                    return false
+                }
+            })
+
+        if (hasLoadedArtwork && ivArtwork.drawable != null) {
+            requestBuilder.placeholder(ivArtwork.drawable)
+        }
+
+        requestBuilder.into(ivArtwork)
     }
 
     private fun startUiPolling() {
@@ -326,7 +377,64 @@ class MainActivity : AppCompatActivity() {
         uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 try {
-                    fetchAndUpdateUiMetadata()
+                    val request = Request.Builder()
+                        .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+                        .build()
+
+                    PlaybackService.okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val jsonStr = response.body?.string() ?: ""
+                            val json = JSONObject(jsonStr)
+                            val nowPlaying = json.optString("nowplaying", "").trim()
+                            var artist = json.optString("currenttrack_artist", "").trim()
+                            var title = json.optString("currenttrack_title", "").trim()
+                            val nextTrack = json.optString("nexttrack", "").trim()
+
+                            val nowPlayingChanged = (nowPlaying != lastUiNowPlaying)
+
+                            if (!nowPlayingChanged && nextTrack == lastUiNextTrack) {
+                                return@use
+                            }
+
+                            if (nowPlayingChanged && lastUiNowPlaying.isNotEmpty()) {
+                                // Wait 1 second after now playing details update before reloading artwork
+                                delay(1000)
+                            }
+
+                            lastUiNowPlaying = nowPlaying
+                            lastUiNextTrack = nextTrack
+
+                            val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+
+                            if (artist.isBlank() || title.isBlank()) {
+                                if (nowPlaying.contains(" - ")) {
+                                    val parts = nowPlaying.split(" - ", limit = 2)
+                                    if (artist.isBlank()) artist = parts[0].trim()
+                                    if (title.isBlank()) title = parts[1].trim()
+                                } else {
+                                    if (title.isBlank()) title = nowPlaying
+                                }
+                            }
+
+                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
+
+                            withContext(Dispatchers.Main) {
+                                if (displayText.isNotEmpty()) {
+                                    tvTrackTitle.text = displayText
+                                }
+
+                                tvNextTrackLabel.visibility = View.VISIBLE
+                                tvNextTrack.visibility = View.VISIBLE
+                                if (nextTrack.isNotEmpty()) {
+                                    tvNextTrack.text = nextTrack
+                                } else {
+                                    tvNextTrack.text = "Bootie Mashup Radio"
+                                }
+
+                                loadAlbumArtwork(artworkBaseUrl)
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -338,94 +446,6 @@ class MainActivity : AppCompatActivity() {
     private fun stopUiPolling() {
         uiPollingJob?.cancel()
         uiPollingJob = null
-    }
-
-    private fun extractArtworkUrlFromJs(jsContent: String): String {
-        val regex = Regex("url\\s*=\\s*['\"]([^'\"]+)['\"]")
-        val match = regex.find(jsContent)
-        return match?.groupValues?.get(1) ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
-    }
-
-    private suspend fun fetchAndUpdateUiMetadata() {
-        // 1. Fetch artwork URL from cover.js
-        var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-        try {
-            val coverRequest = Request.Builder()
-                .url("https://c7.radioboss.fm/w/cover.js?u=205")
-                .build()
-            PlaybackService.okHttpClient.newCall(coverRequest).execute().use { response ->
-                if (response.isSuccessful) {
-                    val jsContent = response.body?.string() ?: ""
-                    artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 2. Fetch now playing info from nowplayinginfo
-        val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
-            .build()
-
-        PlaybackService.okHttpClient.newCall(request).execute().use { response ->
-            if (response.isSuccessful) {
-                val jsonStr = response.body?.string() ?: ""
-                val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "").trim()
-                var artist = json.optString("currenttrack_artist", "").trim()
-                var title = json.optString("currenttrack_title", "").trim()
-                val nextTrack = json.optString("nexttrack", "").trim()
-
-                if (nowPlaying == lastUiNowPlaying && nextTrack == lastUiNextTrack && artworkBaseUrl == lastUiArtworkUrl) {
-                    return@use
-                }
-
-                lastUiNowPlaying = nowPlaying
-                lastUiNextTrack = nextTrack
-                lastUiArtworkUrl = artworkBaseUrl
-
-                if (artist.isBlank() || title.isBlank()) {
-                    if (nowPlaying.contains(" - ")) {
-                        val parts = nowPlaying.split(" - ", limit = 2)
-                        if (artist.isBlank()) artist = parts[0].trim()
-                        if (title.isBlank()) title = parts[1].trim()
-                    } else {
-                        if (title.isBlank()) title = nowPlaying
-                    }
-                }
-
-                val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
-
-                withContext(Dispatchers.Main) {
-                    if (displayText.isNotEmpty()) {
-                        tvTrackTitle.text = displayText
-                    }
-
-                    if (nextTrack.isNotEmpty()) {
-                        tvNextTrackLabel.visibility = View.VISIBLE
-                        tvNextTrack.visibility = View.VISIBLE
-                        tvNextTrack.text = nextTrack
-                    } else {
-                        tvNextTrackLabel.visibility = View.GONE
-                        tvNextTrack.visibility = View.GONE
-                    }
-
-                    val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
-                    val requestBuilder = Glide.with(this@MainActivity)
-                        .load(artworkUrl)
-                        .error(R.mipmap.ic_launcher_round)
-
-                    if (ivArtwork.drawable != null) {
-                        requestBuilder.placeholder(ivArtwork.drawable)
-                    } else {
-                        requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-                    }
-
-                    requestBuilder.into(ivArtwork)
-                }
-            }
-        }
     }
 
     private fun isAndroidTV(): Boolean {

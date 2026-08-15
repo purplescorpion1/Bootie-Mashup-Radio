@@ -60,7 +60,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:scaleType="centerCrop"
-                android:src="@mipmap/ic_launcher_round" />
+                tools:src="@mipmap/ic_launcher_round" />
         </androidx.cardview.widget.CardView>
 
         <!-- Dynamic Now Playing Text (above the DJ decks) -->
@@ -83,7 +83,7 @@
             android:id="@+id/tvTrackTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="DRA'man - Sweet Havana Transvestite"
+            android:text="Bootie Mashup Radio"
             android:textColor="@color/white"
             android:textSize="20sp"
             android:textStyle="bold"
