@@ -17,6 +17,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -24,15 +25,6 @@ import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
-import android.graphics.drawable.Drawable
-import com.bumptech.glide.Glide
-import com.bumptech.glide.load.DataSource
-import com.bumptech.glide.load.engine.DiskCacheStrategy
-import com.bumptech.glide.load.engine.GlideException
-import com.bumptech.glide.load.model.GlideUrl
-import com.bumptech.glide.load.model.LazyHeaders
-import com.bumptech.glide.request.RequestListener
-import com.bumptech.glide.request.target.Target
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -315,7 +307,17 @@ class MainActivity : AppCompatActivity() {
             tvNextTrack.text = "Bootie Mashup Radio"
         }
 
-        // Update Album Artwork using Glide without placeholder flashing
+        // Update Album Artwork smoothly using activeMetadata artworkData or fetching via okHttpClient
+        val artworkData = activeMetadata.artworkData
+        if (artworkData != null && artworkData.isNotEmpty()) {
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
+            if (bitmap != null) {
+                ivArtwork.setImageBitmap(bitmap)
+                hasLoadedArtwork = true
+                return
+            }
+        }
+
         val artworkUri = activeMetadata.artworkUri
         if (artworkUri != null) {
             loadAlbumArtwork(artworkUri.toString())
@@ -323,53 +325,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadAlbumArtwork(baseUrl: String) {
-        val cacheBustingUrl = if (baseUrl.contains("?")) {
-            "$baseUrl&_=" + System.currentTimeMillis()
-        } else {
-            "$baseUrl?_=" + System.currentTimeMillis()
-        }
-
-        val glideUrl = GlideUrl(
-            cacheBustingUrl,
-            LazyHeaders.Builder()
-                .addHeader("Origin", "https://bootiemashup.com")
-                .addHeader("Referer", "https://bootiemashup.com/")
-                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
-                .build()
-        )
-
-        val requestBuilder = Glide.with(this@MainActivity)
-            .load(glideUrl)
-            .diskCacheStrategy(DiskCacheStrategy.NONE)
-            .skipMemoryCache(true)
-            .error(R.mipmap.ic_launcher_round)
-            .listener(object : RequestListener<Drawable> {
-                override fun onLoadFailed(
-                    e: GlideException?,
-                    model: Any?,
-                    target: Target<Drawable>,
-                    isFirstResource: Boolean
-                ): Boolean {
-                    return false
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val cacheBustingUrl = if (baseUrl.contains("?")) {
+                    "$baseUrl&_=" + System.currentTimeMillis()
+                } else {
+                    "$baseUrl?_=" + System.currentTimeMillis()
                 }
 
-                override fun onResourceReady(
-                    resource: Drawable,
-                    model: Any,
-                    target: Target<Drawable>?,
-                    dataSource: DataSource,
-                    isFirstResource: Boolean
-                ): Boolean {
-                    hasLoadedArtwork = true
-                    return false
+                val request = Request.Builder()
+                    .url(cacheBustingUrl)
+                    .build()
+
+                PlaybackService.okHttpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bytes = response.body?.bytes()
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            if (bitmap != null) {
+                                withContext(Dispatchers.Main) {
+                                    ivArtwork.setImageBitmap(bitmap)
+                                    hasLoadedArtwork = true
+                                }
+                            }
+                        }
+                    }
                 }
-            })
-
-        if (hasLoadedArtwork && ivArtwork.drawable != null) {
-            requestBuilder.placeholder(ivArtwork.drawable)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
-
-        requestBuilder.into(ivArtwork)
     }
 
     private fun startUiPolling() {
