@@ -294,15 +294,15 @@ class MainActivity : AppCompatActivity() {
             tvTrackTitle.text = displayText
         }
 
-        // Update Coming Next Track Info
+        // Update Coming Next Track Info without hiding if temporarily omitted
         val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
         if (nextTrack.isNotEmpty()) {
             tvNextTrackLabel.visibility = View.VISIBLE
             tvNextTrack.visibility = View.VISIBLE
             tvNextTrack.text = nextTrack
-        } else {
-            tvNextTrackLabel.visibility = View.GONE
-            tvNextTrack.visibility = View.GONE
+        } else if (tvNextTrack.text.isNotEmpty()) {
+            tvNextTrackLabel.visibility = View.VISIBLE
+            tvNextTrack.visibility = View.VISIBLE
         }
 
         // Update Album Artwork using Glide without placeholder flashing
@@ -385,9 +385,9 @@ class MainActivity : AppCompatActivity() {
                                         tvNextTrackLabel.visibility = View.VISIBLE
                                         tvNextTrack.visibility = View.VISIBLE
                                         tvNextTrack.text = nextTrack
-                                    } else {
-                                        tvNextTrackLabel.visibility = View.GONE
-                                        tvNextTrack.visibility = View.GONE
+                                    } else if (tvNextTrack.text.isNotEmpty()) {
+                                        tvNextTrackLabel.visibility = View.VISIBLE
+                                        tvNextTrack.visibility = View.VISIBLE
                                     }
 
                                     val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
