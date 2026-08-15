@@ -24,10 +24,15 @@ import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
+import android.graphics.drawable.Drawable
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DataSource
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.load.model.LazyHeaders
+import com.bumptech.glide.request.RequestListener
+import com.bumptech.glide.request.target.Target
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +60,7 @@ class MainActivity : AppCompatActivity() {
 
     private var doubleBackToExitPressedOnce = false
     private var uiPollingJob: Job? = null
+    private var hasLoadedArtwork = false
     private var lastUiNowPlaying: String = ""
     private var lastUiNextTrack: String = ""
     private var lastUiArtworkUrl: String = ""
@@ -337,11 +343,30 @@ class MainActivity : AppCompatActivity() {
             .diskCacheStrategy(DiskCacheStrategy.NONE)
             .skipMemoryCache(true)
             .error(R.mipmap.ic_launcher_round)
+            .listener(object : RequestListener<Drawable> {
+                override fun onLoadFailed(
+                    e: GlideException?,
+                    model: Any?,
+                    target: Target<Drawable>,
+                    isFirstResource: Boolean
+                ): Boolean {
+                    return false
+                }
 
-        if (ivArtwork.drawable != null) {
+                override fun onResourceReady(
+                    resource: Drawable,
+                    model: Any,
+                    target: Target<Drawable>?,
+                    dataSource: DataSource,
+                    isFirstResource: Boolean
+                ): Boolean {
+                    hasLoadedArtwork = true
+                    return false
+                }
+            })
+
+        if (hasLoadedArtwork && ivArtwork.drawable != null) {
             requestBuilder.placeholder(ivArtwork.drawable)
-        } else {
-            requestBuilder.placeholder(R.mipmap.ic_launcher_round)
         }
 
         requestBuilder.into(ivArtwork)
