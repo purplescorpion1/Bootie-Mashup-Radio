@@ -27,6 +27,15 @@ import androidx.mediarouter.media.MediaRouteSelector
 import com.bumptech.glide.Glide
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Request
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +51,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaRouteButton: MediaRouteButton
 
     private var doubleBackToExitPressedOnce = false
+    private var uiPollingJob: kotlinx.coroutines.Job? = null
+    private var lastUiNowPlaying: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,8 +133,19 @@ class MainActivity : AppCompatActivity() {
         connectToMediaSession()
     }
 
+    override fun onResume() {
+        super.onResume()
+        startUiPolling()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopUiPolling()
+    }
+
     override fun onStop() {
         super.onStop()
+        stopUiPolling()
         // Release MediaController connection
         releaseMediaController()
     }
@@ -196,6 +218,15 @@ class MainActivity : AppCompatActivity() {
                 controller.prepare()
             }
             controller.play()
+        }
+        // Also send custom action to service for complete sync
+        try {
+            controller.sendCustomCommand(
+                androidx.media3.session.SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -285,6 +316,89 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestBuilder.into(ivArtwork)
+    }
+
+    private fun startUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                try {
+                    fetchAndUpdateUiMetadata()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    private fun stopUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = null
+    }
+
+    private suspend fun fetchAndUpdateUiMetadata() {
+        val request = Request.Builder()
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+            .build()
+
+        PlaybackService.okHttpClient.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val jsonStr = response.body?.string() ?: ""
+                val json = JSONObject(jsonStr)
+                val nowPlaying = json.optString("nowplaying", "").trim()
+                var artist = json.optString("currenttrack_artist", "").trim()
+                var title = json.optString("currenttrack_title", "").trim()
+                val nextTrack = json.optString("nexttrack", "").trim()
+
+                if (nowPlaying.isNotBlank() && nowPlaying == lastUiNowPlaying) {
+                    return@use
+                }
+
+                if (nowPlaying.isNotBlank()) {
+                    lastUiNowPlaying = nowPlaying
+                }
+
+                if (artist.isBlank() || title.isBlank()) {
+                    if (nowPlaying.contains(" - ")) {
+                        val parts = nowPlaying.split(" - ", limit = 2)
+                        if (artist.isBlank()) artist = parts[0].trim()
+                        if (title.isBlank()) title = parts[1].trim()
+                    } else {
+                        if (title.isBlank()) title = if (nowPlaying.isNotBlank()) nowPlaying else "Live Stream"
+                        if (artist.isBlank()) artist = "Bootie Mashup Radio"
+                    }
+                }
+
+                val displayText = if (nowPlaying.isNotBlank()) nowPlaying else "$artist - $title"
+
+                withContext(Dispatchers.Main) {
+                    tvTrackTitle.text = displayText
+
+                    if (nextTrack.isNotEmpty()) {
+                        tvNextTrackLabel.visibility = View.VISIBLE
+                        tvNextTrack.visibility = View.VISIBLE
+                        tvNextTrack.text = nextTrack
+                    } else {
+                        tvNextTrackLabel.visibility = View.GONE
+                        tvNextTrack.visibility = View.GONE
+                    }
+
+                    val artworkUrl = "https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis()
+                    val requestBuilder = Glide.with(this@MainActivity)
+                        .load(artworkUrl)
+                        .error(R.mipmap.ic_launcher_round)
+
+                    if (ivArtwork.drawable != null) {
+                        requestBuilder.placeholder(ivArtwork.drawable)
+                    } else {
+                        requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+                    }
+
+                    requestBuilder.into(ivArtwork)
+                }
+            }
+        }
     }
 
     private fun isAndroidTV(): Boolean {

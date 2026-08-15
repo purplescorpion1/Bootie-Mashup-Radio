@@ -50,6 +50,7 @@ class PlaybackService : MediaSessionService() {
     private var isMuted = false
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
+    private var lastNowPlaying: String = ""
     companion object {
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -131,13 +132,13 @@ class PlaybackService : MediaSessionService() {
         player.playWhenReady = true
 
         // Create PendingIntent to launch MainActivity when the notification is tapped
-        val intent = Intent(this, MainActivity::class.java).apply {
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
-            this,
+            applicationContext,
             0,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -187,6 +188,17 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    fun togglePlayPause() {
+        if (player.playWhenReady) {
+            player.pause()
+        } else {
+            if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                player.prepare()
+            }
+            player.play()
+        }
+    }
+
     fun toggleMute() {
         isMuted = !isMuted
         player.volume = if (isMuted) 0f else 1f
@@ -227,18 +239,32 @@ class PlaybackService : MediaSessionService() {
     }
 
     private suspend fun fetchAndUpdateMetadata() {
+        if (!player.playWhenReady) {
+            // Do not update metadata when player is paused or stopped
+            return
+        }
+
         val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205&nl=1")
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
                 val jsonStr = response.body?.string() ?: ""
                 val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "")
-                var artist = json.optString("currenttrack_artist", "")
-                var title = json.optString("currenttrack_title", "")
-                val nextTrack = json.optString("nexttrack", "")
+                val nowPlaying = json.optString("nowplaying", "").trim()
+                var artist = json.optString("currenttrack_artist", "").trim()
+                var title = json.optString("currenttrack_title", "").trim()
+                val nextTrack = json.optString("nexttrack", "").trim()
+
+                // Only update when nowplaying track actually changes!
+                if (nowPlaying.isNotBlank() && nowPlaying == lastNowPlaying) {
+                    return@use
+                }
+
+                if (nowPlaying.isNotBlank()) {
+                    lastNowPlaying = nowPlaying
+                }
 
                 if (artist.isBlank() || title.isBlank()) {
                     if (nowPlaying.contains(" - ")) {
@@ -299,8 +325,12 @@ class PlaybackService : MediaSessionService() {
             val connectionResult = super.onConnect(session, controller)
             val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
                 .add(SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY))
+                .add(SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY))
                 .build()
             val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_PREPARE)
+                .add(Player.COMMAND_STOP)
                 .add(Player.COMMAND_SET_VOLUME)
                 .add(Player.COMMAND_GET_VOLUME)
                 .build()
@@ -316,9 +346,15 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == "ACTION_TOGGLE_MUTE") {
-                toggleMute()
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            when (customCommand.customAction) {
+                "ACTION_TOGGLE_MUTE" -> {
+                    toggleMute()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                "ACTION_TOGGLE_PLAY_PAUSE" -> {
+                    togglePlayPause()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
