@@ -306,9 +306,18 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun extractArtworkUrlFromJs(jsContent: String): String {
-        val regex = Regex("https?://[^'\"\\s]+\\.jpg", RegexOption.IGNORE_CASE)
-        val match = regex.find(jsContent)
-        return match?.value ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
+        val delimiters = charArrayOf('\'', '"', ' ', '\n', '\r', '\t', ';', '(', ')', '<', '>', ',')
+        val tokens = jsContent.split(*delimiters)
+        for (token in tokens) {
+            val trimmed = token.trim()
+            if ((trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) &&
+                trimmed.contains(".jpg", ignoreCase = true)
+            ) {
+                val cleanUrl = trimmed.split("?")[0].split("#")[0]
+                return if (cleanUrl.endsWith(".jpg", ignoreCase = true)) cleanUrl else trimmed
+            }
+        }
+        return "https://c7.radioboss.fm/w/artwork/205.jpg"
     }
 
     private suspend fun fetchAndUpdateMetadata() {
@@ -363,22 +372,23 @@ class PlaybackService : MediaSessionService() {
 
                 val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
+                val artworkUri = Uri.parse("$artworkBaseUrl?_=" + System.currentTimeMillis())
+
+                val extras = Bundle().apply {
+                    putString("next_track", nextTrack)
+                }
+
+                val updatedMetadata = MediaMetadata.Builder()
+                    .setTitle(if (title.isNotBlank()) title else displayTitle)
+                    .setArtist(artist)
+                    .setArtworkUri(artworkUri)
+                    .setDisplayTitle(displayTitle)
+                    .setExtras(extras)
+                    .build()
+
+                currentPolledMetadata = updatedMetadata
+
                 withContext(Dispatchers.Main) {
-                    val artworkUri = Uri.parse("$artworkBaseUrl?_=" + System.currentTimeMillis())
-
-                    val extras = Bundle().apply {
-                        putString("next_track", nextTrack)
-                    }
-
-                    val updatedMetadata = MediaMetadata.Builder()
-                        .setTitle(if (title.isNotBlank()) title else displayTitle)
-                        .setArtist(artist)
-                        .setArtworkUri(artworkUri)
-                        .setDisplayTitle(displayTitle)
-                        .setExtras(extras)
-                        .build()
-
-                    currentPolledMetadata = updatedMetadata
                     player.playlistMetadata = updatedMetadata
                     startForegroundNotification()
                 }

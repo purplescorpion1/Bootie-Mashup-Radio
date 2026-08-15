@@ -338,11 +338,7 @@ class MainActivity : AppCompatActivity() {
                         PlaybackService.okHttpClient.newCall(coverRequest).execute().use { response ->
                             if (response.isSuccessful) {
                                 val jsContent = response.body?.string() ?: ""
-                                val regex = Regex("https?://[^'\"\\s]+\\.jpg", RegexOption.IGNORE_CASE)
-                                val match = regex.find(jsContent)
-                                if (match != null) {
-                                    artworkBaseUrl = match.value
-                                }
+                                artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
                             }
                         }
                     } catch (e: Exception) {
@@ -423,6 +419,21 @@ class MainActivity : AppCompatActivity() {
     private fun stopUiPolling() {
         uiPollingJob?.cancel()
         uiPollingJob = null
+    }
+
+    private fun extractArtworkUrlFromJs(jsContent: String): String {
+        val delimiters = charArrayOf('\'', '"', ' ', '\n', '\r', '\t', ';', '(', ')', '<', '>', ',')
+        val tokens = jsContent.split(*delimiters)
+        for (token in tokens) {
+            val trimmed = token.trim()
+            if ((trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) &&
+                trimmed.contains(".jpg", ignoreCase = true)
+            ) {
+                val cleanUrl = trimmed.split("?")[0].split("#")[0]
+                return if (cleanUrl.endsWith(".jpg", ignoreCase = true)) cleanUrl else trimmed
+            }
+        }
+        return "https://c7.radioboss.fm/w/artwork/205.jpg"
     }
 
     private fun isAndroidTV(): Boolean {
