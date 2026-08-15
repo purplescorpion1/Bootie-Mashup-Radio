@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +21,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -27,10 +30,13 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -59,6 +65,55 @@ class PlaybackService : MediaSessionService() {
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
     private var lastArtworkUrl: String = ""
+
+    private val okHttpBitmapLoader = object : BitmapLoader {
+        override fun supportsMimeType(mimeType: String): Boolean = true
+
+        override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+            val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            return if (bitmap != null) {
+                Futures.immediateFuture(bitmap)
+            } else {
+                Futures.immediateFailedFuture(IllegalArgumentException("Failed to decode bitmap"))
+            }
+        }
+
+        override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+            val future = SettableFuture.create<Bitmap>()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val request = Request.Builder().url(uri.toString()).build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        val body = response.body
+                        if (response.isSuccessful && body != null) {
+                            val bytes = body.bytes()
+                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            if (bitmap != null) {
+                                future.set(bitmap)
+                                return@launch
+                            }
+                        }
+                    }
+                    future.setException(IOException("Failed to load bitmap from $uri"))
+                } catch (e: Exception) {
+                    future.setException(e)
+                }
+            }
+            return future
+        }
+
+        override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
+            val data = metadata.artworkData
+            if (data != null && data.isNotEmpty()) {
+                return decodeBitmap(data)
+            }
+            val uri = metadata.artworkUri
+            if (uri != null) {
+                return loadBitmap(uri)
+            }
+            return null
+        }
+    }
     companion object {
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -130,10 +185,23 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setMediaItem(mediaItem)
 
-        // Set initial playlist metadata without static title fallbacks
+        // Initial Metadata setup
         val initialMetadata = MediaMetadata.Builder()
+            .setTitle("Bootie Mashup Radio")
+            .setArtist("Live Stream")
+            .setAlbumTitle("Bootie Mashup Radio")
+            .setAlbumArtist("Bootie Mashup Radio")
+            .setDisplayTitle("Bootie Mashup Radio")
+            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
             .build()
+
+        val initialMediaItem = MediaItem.Builder()
+            .setUri("https://c7.radioboss.fm:18205/stream")
+            .setMediaId("bootie_mashup_stream")
+            .setMediaMetadata(initialMetadata)
+            .build()
+        player.setMediaItem(initialMediaItem)
         player.setPlaylistMetadata(initialMetadata)
 
         // Create PendingIntent to launch MainActivity when notification is tapped
@@ -149,9 +217,10 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create MediaSession with session activity configured BEFORE preparing/playing player
+        // Create MediaSession with session activity and custom BitmapLoader
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(pendingIntent)
+            .setBitmapLoader(okHttpBitmapLoader)
             .setCallback(CustomCallback())
             .build()
 
@@ -228,19 +297,39 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val title = currentPolledMetadata?.displayTitle?.toString()
-            ?: currentPolledMetadata?.title?.toString()
+        val title = currentPolledMetadata?.title?.toString()
+            ?: currentPolledMetadata?.displayTitle?.toString()
             ?: "Bootie Mashup Radio"
         val artist = currentPolledMetadata?.artist?.toString() ?: "Live Stream"
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        var artworkBitmap: Bitmap? = null
+        val artworkBytes = currentPolledMetadata?.artworkData
+        if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+            artworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size)
+        }
+
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(artist)
+            .setSubText("Bootie Mashup Radio")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+
+        if (artworkBitmap != null) {
+            notificationBuilder.setLargeIcon(artworkBitmap)
+        }
+
+        val session = mediaSession
+        if (session != null) {
+            notificationBuilder.setStyle(
+                MediaStyleNotificationHelper.MediaStyle(session)
+            )
+        }
+
+        val notification = notificationBuilder.build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -280,9 +369,11 @@ class PlaybackService : MediaSessionService() {
     private fun updateNotificationLayout() {
         val mediaSessionInstance = mediaSession ?: return
         val muteCommand = SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY)
+        val iconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
         val muteButton = CommandButton.Builder()
             .setSessionCommand(muteCommand)
-            .setIconResId(if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp)
+            .setIconResId(iconRes)
+            .setCustomIconResId(iconRes)
             .setDisplayName(if (isMuted) "Unmute" else "Mute")
             .setEnabled(true)
             .build()
@@ -311,8 +402,9 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            if (response.isSuccessful) {
-                val jsonStr = response.body?.string() ?: ""
+            val body = response.body
+            if (response.isSuccessful && body != null) {
+                val jsonStr = body.string()
                 val json = JSONObject(jsonStr)
                 val nowPlaying = json.optString("nowplaying", "").trim()
                 var artist = json.optString("currenttrack_artist", "").trim()
@@ -345,7 +437,9 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
 
-                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
+                val trackTitle = if (title.isNotBlank()) title else if (nowPlaying.isNotBlank()) nowPlaying else "Bootie Mashup Radio"
+                val trackArtist = if (artist.isNotBlank()) artist else "Bootie Mashup Radio"
+                val displayTitleStr = if (nowPlaying.isNotBlank()) nowPlaying else if (artist.isNotBlank() && title.isNotBlank()) "$artist - $title" else trackTitle
 
                 val timestampedArtworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
                 val artworkUri = Uri.parse(timestampedArtworkUrl)
@@ -356,8 +450,9 @@ class PlaybackService : MediaSessionService() {
                         .url(timestampedArtworkUrl)
                         .build()
                     okHttpClient.newCall(artworkRequest).execute().use { artworkResponse ->
-                        if (artworkResponse.isSuccessful) {
-                            artworkBytes = artworkResponse.body?.bytes()
+                        val artworkBody = artworkResponse.body
+                        if (artworkResponse.isSuccessful && artworkBody != null) {
+                            artworkBytes = artworkBody.bytes()
                         }
                     }
                 } catch (e: Exception) {
@@ -369,10 +464,13 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 val metadataBuilder = MediaMetadata.Builder()
-                    .setTitle(if (title.isNotBlank()) title else displayTitle)
-                    .setArtist(artist)
+                    .setTitle(trackTitle)
+                    .setArtist(trackArtist)
+                    .setAlbumTitle("Bootie Mashup Radio")
+                    .setAlbumArtist("Bootie Mashup Radio")
+                    .setDisplayTitle(displayTitleStr)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                     .setArtworkUri(artworkUri)
-                    .setDisplayTitle(displayTitle)
                     .setExtras(extras)
 
                 if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
@@ -380,7 +478,6 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 val updatedMetadata = metadataBuilder.build()
-
                 currentPolledMetadata = updatedMetadata
 
                 withContext(Dispatchers.Main) {
