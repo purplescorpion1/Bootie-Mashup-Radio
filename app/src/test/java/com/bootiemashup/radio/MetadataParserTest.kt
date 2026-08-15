@@ -16,6 +16,22 @@ class MetadataParserTest {
     }
 
     @Test
+    fun testParseTrackInfoPrioritizesRawArtistAndRawTitle() {
+        val nowPlaying = "Martinn - Boys Of Power (Coldplay vs. Don Henley)"
+        val trackInfo = MetadataParser.parseTrackInfo(
+            nowPlaying = nowPlaying,
+            rawArtist = "Martinn",
+            rawTitle = "Boys Of Power (Coldplay vs. Don Henley)",
+            nextTrack = "Thriftshop XL - Trick Me Laura"
+        )
+
+        assertEquals("Martinn", trackInfo.artist)
+        assertEquals("Boys Of Power (Coldplay vs. Don Henley)", trackInfo.title)
+        assertEquals("Martinn - Boys Of Power (Coldplay vs. Don Henley)", trackInfo.nowPlaying)
+        assertEquals("Thriftshop XL - Trick Me Laura", trackInfo.nextTrack)
+    }
+
+    @Test
     fun testParseTrackInfoWithComplexTitle() {
         val nowPlaying = "Thriftshop XL - Trick Me Laura (Kelis vs. Scissor Sisters)"
         val trackInfo = MetadataParser.parseTrackInfo(

@@ -18,17 +18,19 @@ object MetadataParser {
         var artist = rawArtist.trim()
         var title = rawTitle.trim()
 
-        if (trimmedNowPlaying.contains(" - ")) {
-            val parts = trimmedNowPlaying.split(" - ", limit = 2)
-            artist = parts[0].trim()
-            title = parts[1].trim()
-        } else if (trimmedNowPlaying.contains("-")) {
-            val parts = trimmedNowPlaying.split("-", limit = 2)
-            artist = parts[0].trim()
-            title = parts[1].trim()
-        } else {
-            if (artist.isBlank() && title.isBlank()) {
-                title = trimmedNowPlaying
+        if (artist.isBlank() || title.isBlank()) {
+            if (trimmedNowPlaying.contains(" - ")) {
+                val parts = trimmedNowPlaying.split(" - ", limit = 2)
+                if (artist.isBlank()) artist = parts[0].trim()
+                if (title.isBlank()) title = parts[1].trim()
+            } else if (trimmedNowPlaying.contains("-")) {
+                val parts = trimmedNowPlaying.split("-", limit = 2)
+                if (artist.isBlank()) artist = parts[0].trim()
+                if (title.isBlank()) title = parts[1].trim()
+            } else {
+                if (artist.isBlank() && title.isBlank()) {
+                    title = trimmedNowPlaying
+                }
             }
         }
 
