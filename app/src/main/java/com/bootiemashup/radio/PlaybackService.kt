@@ -132,18 +132,17 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setAudioAttributes(audioAttributes, true)
 
-        // Set initial playlist and media item metadata
+        // Set up MediaItem without static mediaMetadata override so playlistMetadata takes effect
+        val mediaItem = MediaItem.Builder()
+            .setUri("https://c7.radioboss.fm:18205/stream")
+            .setMediaId("bootie_mashup_stream")
+            .build()
+
         val initialMetadata = MediaMetadata.Builder()
             .setTitle("Bootie Mashup Radio")
             .setArtist("Live Stream")
             .setAlbumTitle("Bootie Mashup Radio")
             .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
-            .build()
-
-        val mediaItem = MediaItem.Builder()
-            .setUri("https://c7.radioboss.fm:18205/stream")
-            .setMediaId("bootie_mashup_stream")
-            .setMediaMetadata(initialMetadata)
             .build()
 
         player.setMediaItem(mediaItem)
@@ -235,18 +234,28 @@ class PlaybackService : MediaSessionService() {
     private fun setupPlayerNotificationManager() {
         val descriptionAdapter = object : PlayerNotificationManager.MediaDescriptionAdapter {
             override fun getCurrentContentTitle(player: Player): CharSequence {
-                val trackTitle = currentPolledMetadata?.title?.toString()
-                val rawNowPlaying = currentPolledMetadata?.displayTitle?.toString()
+                val polledDisplayTitle = currentPolledMetadata?.displayTitle?.toString()
+                val polledTitle = currentPolledMetadata?.title?.toString()
+                val mediaDisplayTitle = player.mediaMetadata.displayTitle?.toString()
+                val mediaTitle = player.mediaMetadata.title?.toString()
+
                 return when {
-                    !trackTitle.isNullOrBlank() -> trackTitle
-                    !rawNowPlaying.isNullOrBlank() -> rawNowPlaying
+                    !polledDisplayTitle.isNullOrBlank() -> polledDisplayTitle
+                    !polledTitle.isNullOrBlank() -> polledTitle
+                    !mediaDisplayTitle.isNullOrBlank() -> mediaDisplayTitle
+                    !mediaTitle.isNullOrBlank() -> mediaTitle
                     else -> "Bootie Mashup Radio"
                 }
             }
 
             override fun getCurrentContentText(player: Player): CharSequence? {
-                val artistName = currentPolledMetadata?.artist?.toString()
-                return if (!artistName.isNullOrBlank()) artistName else "Live Stream"
+                val polledArtist = currentPolledMetadata?.artist?.toString()
+                val mediaArtist = player.mediaMetadata.artist?.toString()
+                return when {
+                    !polledArtist.isNullOrBlank() -> polledArtist
+                    !mediaArtist.isNullOrBlank() -> mediaArtist
+                    else -> "Live Stream"
+                }
             }
 
             override fun getCurrentLargeIcon(
