@@ -305,23 +305,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun extractArtworkUrlFromJs(jsContent: String): String {
-        val delimiters = charArrayOf('\'', '"', ' ', '\n', '\r', '\t', ';', '(', ')', '<', '>', ',')
-        val tokens = jsContent.split(*delimiters)
-        for (token in tokens) {
-            val trimmed = token.trim()
-            if ((trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) &&
-                trimmed.contains(".jpg", ignoreCase = true)
-            ) {
-                val cleanUrl = trimmed.split("?")[0].split("#")[0]
-                return if (cleanUrl.endsWith(".jpg", ignoreCase = true)) cleanUrl else trimmed
-            }
-        }
-        return "https://c7.radioboss.fm/w/artwork/205.jpg"
-    }
-
     private suspend fun fetchAndUpdateMetadata() {
-        // 1. Fetch now playing info from nowplayinginfo
         val request = Request.Builder()
             .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
             .build()
@@ -337,34 +321,19 @@ class PlaybackService : MediaSessionService() {
 
                 val nowPlayingChanged = (nowPlaying != lastNowPlaying)
 
-                if (nowPlayingChanged) {
+                if (!nowPlayingChanged && nextTrack == lastNextTrack) {
+                    return@use
+                }
+
+                if (nowPlayingChanged && lastNowPlaying.isNotEmpty()) {
                     // Wait 1 second after now playing details update before reloading artwork
                     delay(1000)
                 }
 
-                // Fetch artwork URL from cover.js
-                var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-                try {
-                    val coverRequest = Request.Builder()
-                        .url("https://c7.radioboss.fm/w/cover.js?u=205")
-                        .build()
-                    okHttpClient.newCall(coverRequest).execute().use { coverResponse ->
-                        if (coverResponse.isSuccessful) {
-                            val jsContent = coverResponse.body?.string() ?: ""
-                            artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
-                        }
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-
-                if (!nowPlayingChanged && nextTrack == lastNextTrack && artworkBaseUrl == lastArtworkUrl) {
-                    return@use
-                }
-
                 lastNowPlaying = nowPlaying
                 lastNextTrack = nextTrack
-                lastArtworkUrl = artworkBaseUrl
+
+                val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
 
                 if (artist.isBlank() || title.isBlank()) {
                     if (nowPlaying.contains(" - ")) {

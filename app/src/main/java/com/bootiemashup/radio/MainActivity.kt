@@ -329,7 +329,6 @@ class MainActivity : AppCompatActivity() {
         uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 try {
-                    // 1. Fetch now playing info from nowplayinginfo
                     val request = Request.Builder()
                         .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
                         .build()
@@ -345,73 +344,60 @@ class MainActivity : AppCompatActivity() {
 
                             val nowPlayingChanged = (nowPlaying != lastUiNowPlaying)
 
-                            if (nowPlayingChanged) {
+                            if (!nowPlayingChanged && nextTrack == lastUiNextTrack) {
+                                return@use
+                            }
+
+                            if (nowPlayingChanged && lastUiNowPlaying.isNotEmpty()) {
                                 // Wait 1 second after now playing details update before reloading artwork
                                 delay(1000)
                             }
 
-                            // Fetch artwork URL from cover.js
-                            var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-                            try {
-                                val coverRequest = Request.Builder()
-                                    .url("https://c7.radioboss.fm/w/cover.js?u=205")
-                                    .build()
-                                PlaybackService.okHttpClient.newCall(coverRequest).execute().use { coverResponse ->
-                                    if (coverResponse.isSuccessful) {
-                                        val jsContent = coverResponse.body?.string() ?: ""
-                                        artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
-                                    }
+                            lastUiNowPlaying = nowPlaying
+                            lastUiNextTrack = nextTrack
+
+                            val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+
+                            if (artist.isBlank() || title.isBlank()) {
+                                if (nowPlaying.contains(" - ")) {
+                                    val parts = nowPlaying.split(" - ", limit = 2)
+                                    if (artist.isBlank()) artist = parts[0].trim()
+                                    if (title.isBlank()) title = parts[1].trim()
+                                } else {
+                                    if (title.isBlank()) title = nowPlaying
                                 }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
                             }
 
-                            if (nowPlayingChanged || nextTrack != lastUiNextTrack || artworkBaseUrl != lastUiArtworkUrl) {
-                                lastUiNowPlaying = nowPlaying
-                                lastUiNextTrack = nextTrack
-                                lastUiArtworkUrl = artworkBaseUrl
+                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
-                                if (artist.isBlank() || title.isBlank()) {
-                                    if (nowPlaying.contains(" - ")) {
-                                        val parts = nowPlaying.split(" - ", limit = 2)
-                                        if (artist.isBlank()) artist = parts[0].trim()
-                                        if (title.isBlank()) title = parts[1].trim()
-                                    } else {
-                                        if (title.isBlank()) title = nowPlaying
-                                    }
+                            withContext(Dispatchers.Main) {
+                                if (displayText.isNotEmpty()) {
+                                    tvTrackTitle.text = displayText
                                 }
 
-                                val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
-
-                                withContext(Dispatchers.Main) {
-                                    if (displayText.isNotEmpty()) {
-                                        tvTrackTitle.text = displayText
-                                    }
-
-                                    if (nextTrack.isNotEmpty()) {
-                                        tvNextTrackLabel.visibility = View.VISIBLE
-                                        tvNextTrack.visibility = View.VISIBLE
-                                        tvNextTrack.text = nextTrack
-                                    } else if (tvNextTrack.text.isNotEmpty()) {
-                                        tvNextTrackLabel.visibility = View.VISIBLE
-                                        tvNextTrack.visibility = View.VISIBLE
-                                    }
-
-                                    val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
-                                    val requestBuilder = Glide.with(this@MainActivity)
-                                        .load(artworkUrl)
-                                        .diskCacheStrategy(DiskCacheStrategy.NONE)
-                                        .skipMemoryCache(true)
-                                        .error(R.mipmap.ic_launcher_round)
-
-                                    if (ivArtwork.drawable != null) {
-                                        requestBuilder.placeholder(ivArtwork.drawable)
-                                    } else {
-                                        requestBuilder.placeholder(R.mipmap.ic_launcher_round)
-                                    }
-
-                                    requestBuilder.into(ivArtwork)
+                                if (nextTrack.isNotEmpty()) {
+                                    tvNextTrackLabel.visibility = View.VISIBLE
+                                    tvNextTrack.visibility = View.VISIBLE
+                                    tvNextTrack.text = nextTrack
+                                } else if (tvNextTrack.text.isNotEmpty()) {
+                                    tvNextTrackLabel.visibility = View.VISIBLE
+                                    tvNextTrack.visibility = View.VISIBLE
                                 }
+
+                                val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
+                                val requestBuilder = Glide.with(this@MainActivity)
+                                    .load(artworkUrl)
+                                    .diskCacheStrategy(DiskCacheStrategy.NONE)
+                                    .skipMemoryCache(true)
+                                    .error(R.mipmap.ic_launcher_round)
+
+                                if (ivArtwork.drawable != null) {
+                                    requestBuilder.placeholder(ivArtwork.drawable)
+                                } else {
+                                    requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+                                }
+
+                                requestBuilder.into(ivArtwork)
                             }
                         }
                     }
@@ -426,21 +412,6 @@ class MainActivity : AppCompatActivity() {
     private fun stopUiPolling() {
         uiPollingJob?.cancel()
         uiPollingJob = null
-    }
-
-    private fun extractArtworkUrlFromJs(jsContent: String): String {
-        val delimiters = charArrayOf('\'', '"', ' ', '\n', '\r', '\t', ';', '(', ')', '<', '>', ',')
-        val tokens = jsContent.split(*delimiters)
-        for (token in tokens) {
-            val trimmed = token.trim()
-            if ((trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) &&
-                trimmed.contains(".jpg", ignoreCase = true)
-            ) {
-                val cleanUrl = trimmed.split("?")[0].split("#")[0]
-                return if (cleanUrl.endsWith(".jpg", ignoreCase = true)) cleanUrl else trimmed
-            }
-        }
-        return "https://c7.radioboss.fm/w/artwork/205.jpg"
     }
 
     private fun isAndroidTV(): Boolean {
