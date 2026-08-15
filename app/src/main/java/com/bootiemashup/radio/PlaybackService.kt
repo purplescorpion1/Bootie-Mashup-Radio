@@ -27,6 +27,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
@@ -127,18 +128,22 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setAudioAttributes(audioAttributes, true)
 
-        // Set up MediaItem
+        // Set initial playlist and media item metadata
+        val initialMetadata = MediaMetadata.Builder()
+            .setTitle("Bootie Mashup Radio")
+            .setArtist("Live Stream")
+            .setAlbumTitle("Bootie Mashup Radio")
+            .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
+            .build()
+
         val mediaItem = MediaItem.Builder()
             .setUri("https://c7.radioboss.fm:18205/stream")
             .setMediaId("bootie_mashup_stream")
+            .setMediaMetadata(initialMetadata)
             .build()
-        player.setMediaItem(mediaItem)
 
-        // Set initial playlist metadata without static title fallbacks
-        val initialMetadata = MediaMetadata.Builder()
-            .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
-            .build()
-        player.setPlaylistMetadata(initialMetadata)
+        player.setMediaItem(mediaItem)
+        player.playlistMetadata = initialMetadata
 
         // Create PendingIntent to launch MainActivity when notification is tapped
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
@@ -158,6 +163,15 @@ class PlaybackService : MediaSessionService() {
             .setSessionActivity(pendingIntent)
             .setCallback(CustomCallback())
             .build()
+
+        // Configure Media3 DefaultMediaNotificationProvider
+        createNotificationChannel()
+        val defaultNotificationProvider = DefaultMediaNotificationProvider.Builder(this)
+            .setChannelId(CHANNEL_ID)
+            .build().apply {
+                setSmallIcon(R.mipmap.ic_launcher)
+            }
+        setMediaNotificationProvider(defaultNotificationProvider)
 
         // Start Foreground Notification immediately to prevent ForegroundServiceDidNotStartInTimeException
         startForegroundNotification()
@@ -432,11 +446,16 @@ class PlaybackService : MediaSessionService() {
                     putString("next_track", trackInfo.nextTrack)
                 }
 
+                val titleToSet = if (trackInfo.title.isNotBlank()) trackInfo.title else displayTitle
+                val artistToSet = if (trackInfo.artist.isNotBlank()) trackInfo.artist else "Bootie Mashup Radio"
+
                 val metadataBuilder = MediaMetadata.Builder()
-                    .setTitle(if (trackInfo.title.isNotBlank()) trackInfo.title else displayTitle)
-                    .setArtist(trackInfo.artist)
+                    .setTitle(titleToSet)
+                    .setArtist(artistToSet)
+                    .setAlbumTitle("Bootie Mashup Radio")
+                    .setAlbumArtist(artistToSet)
+                    .setDisplayTitle(titleToSet)
                     .setArtworkUri(artworkUri)
-                    .setDisplayTitle(displayTitle)
                     .setExtras(extras)
 
                 if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
@@ -455,6 +474,13 @@ class PlaybackService : MediaSessionService() {
                 currentPolledMetadata = updatedMetadata
 
                 withContext(Dispatchers.Main) {
+                    val currentItem = player.currentMediaItem
+                    if (currentItem != null) {
+                        val updatedMediaItem = currentItem.buildUpon()
+                            .setMediaMetadata(updatedMetadata)
+                            .build()
+                        player.replaceMediaItem(player.currentMediaItemIndex, updatedMediaItem)
+                    }
                     player.playlistMetadata = updatedMetadata
                     startForegroundNotification()
                 }
