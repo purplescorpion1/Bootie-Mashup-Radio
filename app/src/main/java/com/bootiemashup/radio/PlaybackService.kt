@@ -1,13 +1,19 @@
 package com.bootiemashup.radio
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import androidx.annotation.OptIn
+import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -85,6 +91,9 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private val CHANNEL_ID = "bootie_radio_playback_channel"
+    private val NOTIFICATION_ID = 1001
+
     override fun onCreate() {
         super.onCreate()
 
@@ -114,7 +123,7 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setAudioAttributes(audioAttributes, true)
 
-        // Set up play when ready and prepare stream
+        // Set up MediaItem
         val mediaItem = MediaItem.Builder()
             .setUri("https://c7.radioboss.fm:18205/stream")
             .setMediaId("bootie_mashup_stream")
@@ -127,10 +136,7 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setPlaylistMetadata(initialMetadata)
 
-        player.prepare()
-        player.playWhenReady = true
-
-        // Create PendingIntent to launch MainActivity when the notification is tapped
+        // Create PendingIntent to launch MainActivity when notification is tapped
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             action = Intent.ACTION_MAIN
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -143,11 +149,17 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create MediaSession with session activity configured
+        // Create MediaSession with session activity configured BEFORE preparing/playing player
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(pendingIntent)
             .setCallback(CustomCallback())
             .build()
+
+        // Start Foreground Notification immediately to prevent ForegroundServiceDidNotStartInTimeException
+        startForegroundNotification()
+
+        player.prepare()
+        player.playWhenReady = true
 
         // Register player listener for toast messages on status changes and metadata persistence
         player.addListener(object : Player.Listener {
@@ -179,6 +191,62 @@ class PlaybackService : MediaSessionService() {
 
         // Initialize notification button layout
         updateNotificationLayout()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForegroundNotification()
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Bootie Radio Playback",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Background audio streaming for Bootie Mashup Radio"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun startForegroundNotification() {
+        createNotificationChannel()
+
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val title = currentPolledMetadata?.displayTitle?.toString()
+            ?: currentPolledMetadata?.title?.toString()
+            ?: "Bootie Mashup Radio"
+        val artist = currentPolledMetadata?.artist?.toString() ?: "Live Stream"
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(artist)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun showToast(msg: String) {
@@ -238,9 +306,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun extractArtworkUrlFromJs(jsContent: String): String {
-        val regex = Regex("url\\s*=\\s*['\"]([^'\"]+)['\"]")
+        val regex = Regex("https?://[^'\"\\s]+\\.jpg", RegexOption.IGNORE_CASE)
         val match = regex.find(jsContent)
-        return match?.groupValues?.get(1) ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
+        return match?.value ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
     }
 
     private suspend fun fetchAndUpdateMetadata() {
