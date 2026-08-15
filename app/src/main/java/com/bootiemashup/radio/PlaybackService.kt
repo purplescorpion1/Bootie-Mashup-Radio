@@ -130,8 +130,14 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setMediaItem(mediaItem)
 
-        // Set initial playlist metadata without static title fallbacks
+        // Set initial playlist metadata with default title/artist and artwork
         val initialMetadata = MediaMetadata.Builder()
+            .setTitle("Bootie Mashup Radio")
+            .setArtist("Live Stream")
+            .setAlbumArtist("Bootie Mashup Radio")
+            .setAlbumTitle("Bootie Mashup Radio")
+            .setDisplayTitle("Bootie Mashup Radio")
+            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
             .build()
         player.setPlaylistMetadata(initialMetadata)
@@ -333,20 +339,12 @@ class PlaybackService : MediaSessionService() {
                 lastNowPlaying = nowPlaying
                 lastNextTrack = nextTrack
 
+                val trackInfo = MetadataParser.parseTrackInfo(nowPlaying, artist, title, nextTrack)
+                val finalArtist = if (trackInfo.artist.isNotBlank()) trackInfo.artist else "Bootie Mashup Radio"
+                val finalTitle = if (trackInfo.title.isNotBlank()) trackInfo.title else "Bootie Mashup Radio"
+                val displayTitle = if (trackInfo.nowPlaying.isNotBlank()) trackInfo.nowPlaying else "$finalArtist - $finalTitle"
+
                 val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-
-                if (artist.isBlank() || title.isBlank()) {
-                    if (nowPlaying.contains(" - ")) {
-                        val parts = nowPlaying.split(" - ", limit = 2)
-                        if (artist.isBlank()) artist = parts[0].trim()
-                        if (title.isBlank()) title = parts[1].trim()
-                    } else {
-                        if (title.isBlank()) title = nowPlaying
-                    }
-                }
-
-                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
-
                 val timestampedArtworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
                 val artworkUri = Uri.parse(timestampedArtworkUrl)
 
@@ -369,14 +367,18 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 val metadataBuilder = MediaMetadata.Builder()
-                    .setTitle(if (title.isNotBlank()) title else displayTitle)
-                    .setArtist(artist)
-                    .setArtworkUri(artworkUri)
+                    .setTitle(finalTitle)
+                    .setArtist(finalArtist)
+                    .setAlbumArtist(finalArtist)
+                    .setAlbumTitle("Bootie Mashup Radio")
                     .setDisplayTitle(displayTitle)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                    .setArtworkUri(artworkUri)
                     .setExtras(extras)
 
-                if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
-                    metadataBuilder.setArtworkData(artworkBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                val bytes = artworkBytes
+                if (bytes != null && bytes.isNotEmpty()) {
+                    metadataBuilder.setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
                 }
 
                 val updatedMetadata = metadataBuilder.build()
