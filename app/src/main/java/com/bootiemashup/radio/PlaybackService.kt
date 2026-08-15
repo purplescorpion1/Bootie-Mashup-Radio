@@ -18,6 +18,7 @@ import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -217,8 +218,19 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create MediaSession with session activity and custom BitmapLoader
-        mediaSession = MediaSession.Builder(this, player)
+        // Create ForwardingPlayer so MediaSession delegates getMediaMetadata to currentPolledMetadata
+        val sessionPlayer = object : ForwardingPlayer(player) {
+            override fun getMediaMetadata(): MediaMetadata {
+                return currentPolledMetadata ?: super.getMediaMetadata()
+            }
+
+            override fun getPlaylistMetadata(): MediaMetadata {
+                return currentPolledMetadata ?: super.getPlaylistMetadata()
+            }
+        }
+
+        // Create MediaSession with session activity and custom BitmapLoader using sessionPlayer
+        mediaSession = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(pendingIntent)
             .setBitmapLoader(okHttpBitmapLoader)
             .setCallback(CustomCallback())
