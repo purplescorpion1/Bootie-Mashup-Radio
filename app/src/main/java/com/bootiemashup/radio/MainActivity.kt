@@ -27,6 +27,15 @@ import androidx.mediarouter.media.MediaRouteSelector
 import com.bumptech.glide.Glide
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Request
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +51,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaRouteButton: MediaRouteButton
 
     private var doubleBackToExitPressedOnce = false
+    private var uiPollingJob: kotlinx.coroutines.Job? = null
+    private var lastUiNowPlaying: String = ""
+    private var lastUiNextTrack: String = ""
+    private var lastUiArtworkUrl: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,12 +125,29 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Connect to Media3 Session
+        // Start foreground service and connect to Media3 Session
+        try {
+            val serviceIntent = Intent(this, PlaybackService::class.java)
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         connectToMediaSession()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startUiPolling()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopUiPolling()
     }
 
     override fun onStop() {
         super.onStop()
+        stopUiPolling()
         // Release MediaController connection
         releaseMediaController()
     }
@@ -143,7 +173,15 @@ class MainActivity : AppCompatActivity() {
         // Listen for playback and metadata changes from session
         controller.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                updatePlayPauseUI(isPlaying)
+                updatePlayPauseUI(controller.playWhenReady)
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                updatePlayPauseUI(playWhenReady)
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onVolumeChanged(volume: Float) {
@@ -153,12 +191,18 @@ class MainActivity : AppCompatActivity() {
             override fun onPlaylistMetadataChanged(metadata: MediaMetadata) {
                 updateTrackMetadataUI(metadata)
             }
+
+            override fun onMediaMetadataChanged(metadata: MediaMetadata) {
+                updateTrackMetadataUI(controller.playlistMetadata)
+            }
         })
 
         // Initial UI sync
-        updatePlayPauseUI(controller.isPlaying)
+        updatePlayPauseUI(controller.playWhenReady)
         updateMuteUI(controller.volume == 0f)
-        updateTrackMetadataUI(controller.playlistMetadata)
+        if (controller.playlistMetadata.displayTitle != null || controller.playlistMetadata.title != null) {
+            updateTrackMetadataUI(controller.playlistMetadata)
+        }
     }
 
     private fun releaseMediaController() {
@@ -171,10 +215,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePlayback() {
         val controller = mediaController ?: return
-        if (controller.isPlaying) {
+        if (controller.playWhenReady) {
             controller.pause()
         } else {
+            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
+                controller.prepare()
+            }
             controller.play()
+        }
+        // Also send custom action to service for complete sync
+        try {
+            controller.sendCustomCommand(
+                androidx.media3.session.SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -187,6 +243,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             controller.volume = 0f
             updateMuteUI(true)
+        }
+        // Also trigger service custom action for complete sync
+        try {
+            controller.sendCustomCommand(
+                androidx.media3.session.SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -210,22 +275,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateTrackMetadataUI(metadata: MediaMetadata) {
-        // Update Track Title
-        val nowPlaying = metadata.displayTitle?.toString() ?: ""
-        val artist = metadata.artist?.toString() ?: ""
-        val title = metadata.title?.toString() ?: ""
+    private fun updateTrackMetadataUI(metadata: MediaMetadata?) {
+        val activeMetadata = metadata ?: return
+
+        val nowPlaying = activeMetadata.displayTitle?.toString() ?: ""
+        val artist = activeMetadata.artist?.toString() ?: ""
+        val title = activeMetadata.title?.toString() ?: ""
 
         val displayText = when {
             nowPlaying.isNotEmpty() -> nowPlaying
             artist.isNotEmpty() && title.isNotEmpty() -> "$artist - $title"
             title.isNotEmpty() -> title
-            else -> "Bootie Mashup Radio"
+            else -> ""
         }
-        tvTrackTitle.text = displayText
+
+        if (displayText.isNotEmpty()) {
+            tvTrackTitle.text = displayText
+        }
 
         // Update Coming Next Track Info
-        val nextTrack = metadata.extras?.getString("next_track") ?: ""
+        val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
         if (nextTrack.isNotEmpty()) {
             tvNextTrackLabel.visibility = View.VISIBLE
             tvNextTrack.visibility = View.VISIBLE
@@ -236,19 +305,127 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Update Album Artwork using Glide without placeholder flashing
-        val artworkUri = metadata.artworkUri
+        val artworkUri = activeMetadata.artworkUri
+        if (artworkUri != null) {
+            val requestBuilder = Glide.with(this@MainActivity)
+                .load(artworkUri)
+                .error(R.mipmap.ic_launcher_round)
 
-        val requestBuilder = Glide.with(this@MainActivity)
-            .load(artworkUri ?: "https://c7.radioboss.fm/w/artwork/205.jpg")
-            .error(R.mipmap.ic_launcher_round)
+            if (ivArtwork.drawable != null) {
+                requestBuilder.placeholder(ivArtwork.drawable)
+            } else {
+                requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+            }
 
-        if (ivArtwork.drawable != null) {
-            requestBuilder.placeholder(ivArtwork.drawable)
-        } else {
-            requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+            requestBuilder.into(ivArtwork)
+        }
+    }
+
+    private fun startUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                try {
+                    fetchAndUpdateUiMetadata()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    private fun stopUiPolling() {
+        uiPollingJob?.cancel()
+        uiPollingJob = null
+    }
+
+    private fun extractArtworkUrlFromJs(jsContent: String): String {
+        val regex = Regex("url\\s*=\\s*['\"]([^'\"]+)['\"]")
+        val match = regex.find(jsContent)
+        return match?.groupValues?.get(1) ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
+    }
+
+    private suspend fun fetchAndUpdateUiMetadata() {
+        // 1. Fetch artwork URL from cover.js
+        var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+        try {
+            val coverRequest = Request.Builder()
+                .url("https://c7.radioboss.fm/w/cover.js?u=205")
+                .build()
+            PlaybackService.okHttpClient.newCall(coverRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    val jsContent = response.body?.string() ?: ""
+                    artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
-        requestBuilder.into(ivArtwork)
+        // 2. Fetch now playing info from nowplayinginfo
+        val request = Request.Builder()
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+            .build()
+
+        PlaybackService.okHttpClient.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val jsonStr = response.body?.string() ?: ""
+                val json = JSONObject(jsonStr)
+                val nowPlaying = json.optString("nowplaying", "").trim()
+                var artist = json.optString("currenttrack_artist", "").trim()
+                var title = json.optString("currenttrack_title", "").trim()
+                val nextTrack = json.optString("nexttrack", "").trim()
+
+                if (nowPlaying == lastUiNowPlaying && nextTrack == lastUiNextTrack && artworkBaseUrl == lastUiArtworkUrl) {
+                    return@use
+                }
+
+                lastUiNowPlaying = nowPlaying
+                lastUiNextTrack = nextTrack
+                lastUiArtworkUrl = artworkBaseUrl
+
+                if (artist.isBlank() || title.isBlank()) {
+                    if (nowPlaying.contains(" - ")) {
+                        val parts = nowPlaying.split(" - ", limit = 2)
+                        if (artist.isBlank()) artist = parts[0].trim()
+                        if (title.isBlank()) title = parts[1].trim()
+                    } else {
+                        if (title.isBlank()) title = nowPlaying
+                    }
+                }
+
+                val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
+
+                withContext(Dispatchers.Main) {
+                    if (displayText.isNotEmpty()) {
+                        tvTrackTitle.text = displayText
+                    }
+
+                    if (nextTrack.isNotEmpty()) {
+                        tvNextTrackLabel.visibility = View.VISIBLE
+                        tvNextTrack.visibility = View.VISIBLE
+                        tvNextTrack.text = nextTrack
+                    } else {
+                        tvNextTrackLabel.visibility = View.GONE
+                        tvNextTrack.visibility = View.GONE
+                    }
+
+                    val artworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
+                    val requestBuilder = Glide.with(this@MainActivity)
+                        .load(artworkUrl)
+                        .error(R.mipmap.ic_launcher_round)
+
+                    if (ivArtwork.drawable != null) {
+                        requestBuilder.placeholder(ivArtwork.drawable)
+                    } else {
+                        requestBuilder.placeholder(R.mipmap.ic_launcher_round)
+                    }
+
+                    requestBuilder.into(ivArtwork)
+                }
+            }
+        }
     }
 
     private fun isAndroidTV(): Boolean {

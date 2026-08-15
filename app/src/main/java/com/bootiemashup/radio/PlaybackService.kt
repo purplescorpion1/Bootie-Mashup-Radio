@@ -49,6 +49,10 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
+    private var currentPolledMetadata: MediaMetadata? = null
+    private var lastNowPlaying: String = ""
+    private var lastNextTrack: String = ""
+    private var lastArtworkUrl: String = ""
     companion object {
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -99,7 +103,9 @@ class PlaybackService : MediaSessionService() {
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)
-            .build()
+            .build().apply {
+                setWakeMode(C.WAKE_MODE_NETWORK)
+            }
 
         // Handle audio focus automatically
         val audioAttributes = AudioAttributes.Builder()
@@ -115,11 +121,8 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setMediaItem(mediaItem)
 
-        // Set initial playlist metadata
+        // Set initial playlist metadata without static title fallbacks
         val initialMetadata = MediaMetadata.Builder()
-            .setTitle("Live Stream")
-            .setArtist("Bootie Mashup Radio")
-            .setAlbumTitle("Bootie Mashup Radio")
             .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
             .build()
         player.setPlaylistMetadata(initialMetadata)
@@ -128,11 +131,13 @@ class PlaybackService : MediaSessionService() {
         player.playWhenReady = true
 
         // Create PendingIntent to launch MainActivity when the notification is tapped
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        val intent = Intent(applicationContext, MainActivity::class.java).apply {
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pendingIntent = PendingIntent.getActivity(
-            this,
+            applicationContext,
             0,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -144,7 +149,7 @@ class PlaybackService : MediaSessionService() {
             .setCallback(CustomCallback())
             .build()
 
-        // Register player listener for toast messages on status changes
+        // Register player listener for toast messages on status changes and metadata persistence
         player.addListener(object : Player.Listener {
             private var lastState: Boolean? = null
 
@@ -155,6 +160,15 @@ class PlaybackService : MediaSessionService() {
                         showToast("Audio Playing")
                     } else {
                         showToast("Audio Paused")
+                    }
+                }
+            }
+
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                // Ensure stream ICY metadata does not overwrite polled metadata
+                currentPolledMetadata?.let { polled ->
+                    if (player.playlistMetadata != polled) {
+                        player.playlistMetadata = polled
                     }
                 }
             }
@@ -170,6 +184,17 @@ class PlaybackService : MediaSessionService() {
     private fun showToast(msg: String) {
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun togglePlayPause() {
+        if (player.playWhenReady) {
+            player.pause()
+        } else {
+            if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                player.prepare()
+            }
+            player.play()
         }
     }
 
@@ -212,19 +237,56 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun extractArtworkUrlFromJs(jsContent: String): String {
+        val regex = Regex("url\\s*=\\s*['\"]([^'\"]+)['\"]")
+        val match = regex.find(jsContent)
+        return match?.groupValues?.get(1) ?: "https://c7.radioboss.fm/w/artwork/205.jpg"
+    }
+
     private suspend fun fetchAndUpdateMetadata() {
+        if (!player.playWhenReady) {
+            // Do not update metadata when player is paused or stopped
+            return
+        }
+
+        // 1. Fetch artwork URL from cover.js
+        var artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
+        try {
+            val coverRequest = Request.Builder()
+                .url("https://c7.radioboss.fm/w/cover.js?u=205")
+                .build()
+            okHttpClient.newCall(coverRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    val jsContent = response.body?.string() ?: ""
+                    artworkBaseUrl = extractArtworkUrlFromJs(jsContent)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Fetch now playing info from nowplayinginfo
         val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205&nl=1")
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
                 val jsonStr = response.body?.string() ?: ""
                 val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "")
-                var artist = json.optString("currenttrack_artist", "")
-                var title = json.optString("currenttrack_title", "")
-                val nextTrack = json.optString("nexttrack", "")
+                val nowPlaying = json.optString("nowplaying", "").trim()
+                var artist = json.optString("currenttrack_artist", "").trim()
+                var title = json.optString("currenttrack_title", "").trim()
+                val nextTrack = json.optString("nexttrack", "").trim()
+
+                // Only update when details actually change!
+                if (nowPlaying == lastNowPlaying && nextTrack == lastNextTrack && artworkBaseUrl == lastArtworkUrl) {
+                    return@use
+                }
+
+                lastNowPlaying = nowPlaying
+                lastNextTrack = nextTrack
+                lastArtworkUrl = artworkBaseUrl
 
                 if (artist.isBlank() || title.isBlank()) {
                     if (nowPlaying.contains(" - ")) {
@@ -232,39 +294,29 @@ class PlaybackService : MediaSessionService() {
                         if (artist.isBlank()) artist = parts[0].trim()
                         if (title.isBlank()) title = parts[1].trim()
                     } else {
-                        if (title.isBlank()) title = if (nowPlaying.isNotBlank()) nowPlaying else "Live Stream"
-                        if (artist.isBlank()) artist = "Bootie Mashup Radio"
+                        if (title.isBlank()) title = nowPlaying
                     }
                 }
 
-                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else "$artist - $title"
+                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
                 withContext(Dispatchers.Main) {
-                    val artworkUri = Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis())
+                    val artworkUri = Uri.parse("$artworkBaseUrl?_=" + System.currentTimeMillis())
 
                     val extras = Bundle().apply {
                         putString("next_track", nextTrack)
                     }
 
                     val updatedMetadata = MediaMetadata.Builder()
-                        .setTitle(title)
+                        .setTitle(if (title.isNotBlank()) title else displayTitle)
                         .setArtist(artist)
-                        .setAlbumTitle("Bootie Mashup Radio")
                         .setArtworkUri(artworkUri)
                         .setDisplayTitle(displayTitle)
                         .setExtras(extras)
                         .build()
 
-                    player.setPlaylistMetadata(updatedMetadata)
-
-                    // Also update the current media item's metadata to seamlessly update the system notification
-                    val currentItem = player.currentMediaItem
-                    if (currentItem != null) {
-                        val updatedItem = currentItem.buildUpon()
-                            .setMediaMetadata(updatedMetadata)
-                            .build()
-                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
-                    }
+                    currentPolledMetadata = updatedMetadata
+                    player.playlistMetadata = updatedMetadata
                 }
             }
         }
@@ -293,10 +345,18 @@ class PlaybackService : MediaSessionService() {
             val connectionResult = super.onConnect(session, controller)
             val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
                 .add(SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY))
+                .add(SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY))
+                .build()
+            val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_PREPARE)
+                .add(Player.COMMAND_STOP)
+                .add(Player.COMMAND_SET_VOLUME)
+                .add(Player.COMMAND_GET_VOLUME)
                 .build()
             return MediaSession.ConnectionResult.accept(
                 availableSessionCommands,
-                connectionResult.availablePlayerCommands
+                availablePlayerCommands
             )
         }
 
@@ -306,9 +366,15 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == "ACTION_TOGGLE_MUTE") {
-                toggleMute()
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            when (customCommand.customAction) {
+                "ACTION_TOGGLE_MUTE" -> {
+                    toggleMute()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                "ACTION_TOGGLE_PLAY_PAUSE" -> {
+                    togglePlayPause()
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
