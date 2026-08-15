@@ -1,11 +1,14 @@
 package com.bootiemashup.radio
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import androidx.core.app.ActivityCompat
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -112,6 +115,13 @@ class MainActivity : AppCompatActivity() {
             mediaRouteButton.onFocusChangeListener = focusChangeListener
 
             btnPlayPause.requestFocus()
+        }
+
+        // Request Notification permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
         }
 
         // Setup button listeners
