@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +29,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
@@ -56,6 +59,7 @@ class PlaybackService : MediaSessionService() {
     private var isMuted = false
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
+    private var currentArtworkBitmap: Bitmap? = null
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
     private var lastArtworkUrl: String = ""
@@ -173,6 +177,7 @@ class PlaybackService : MediaSessionService() {
                     } else {
                         showToast("Audio Paused")
                     }
+                    startForegroundNotification()
                 }
             }
 
@@ -194,6 +199,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            "ACTION_TOGGLE_PLAY_PAUSE" -> togglePlayPause()
+            "ACTION_TOGGLE_MUTE" -> toggleMute()
+        }
         startForegroundNotification()
         return super.onStartCommand(intent, flags, startId)
     }
@@ -228,19 +237,75 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val title = currentPolledMetadata?.displayTitle?.toString()
-            ?: currentPolledMetadata?.title?.toString()
-            ?: "Bootie Mashup Radio"
-        val artist = currentPolledMetadata?.artist?.toString() ?: "Live Stream"
+        val trackTitle = currentPolledMetadata?.title?.toString()
+        val artistName = currentPolledMetadata?.artist?.toString()
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val displayTitle = if (!trackTitle.isNullOrBlank()) trackTitle else (currentPolledMetadata?.displayTitle?.toString() ?: "Bootie Mashup Radio")
+        val displayArtist = if (!artistName.isNullOrBlank()) artistName else "Live Stream"
+
+        val playPauseIntent = Intent(applicationContext, PlaybackService::class.java).apply {
+            action = "ACTION_TOGGLE_PLAY_PAUSE"
+        }
+        val playPausePendingIntent = PendingIntent.getService(
+            applicationContext,
+            101,
+            playPauseIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val muteIntent = Intent(applicationContext, PlaybackService::class.java).apply {
+            action = "ACTION_TOGGLE_MUTE"
+        }
+        val mutePendingIntent = PendingIntent.getService(
+            applicationContext,
+            102,
+            muteIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
+
+        val playPauseIcon = if (isPlaying) R.drawable.ic_pause_white_24dp else R.drawable.ic_play_arrow_white_24dp
+        val playPauseTitle = if (isPlaying) "Pause" else "Play"
+
+        val muteIcon = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
+        val muteTitle = if (isMuted) "Unmute" else "Mute"
+
+        val playPauseAction = NotificationCompat.Action.Builder(
+            playPauseIcon,
+            playPauseTitle,
+            playPausePendingIntent
+        ).build()
+
+        val muteAction = NotificationCompat.Action.Builder(
+            muteIcon,
+            muteTitle,
+            mutePendingIntent
+        ).build()
+
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(artist)
+            .setContentTitle(displayTitle)
+            .setContentText(displayArtist)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .addAction(playPauseAction)
+            .addAction(muteAction)
+
+        currentArtworkBitmap?.let {
+            notificationBuilder.setLargeIcon(it)
+        }
+
+        mediaSession?.let { session ->
+            notificationBuilder.setStyle(
+                MediaStyleNotificationHelper.MediaStyle(session)
+                    .setShowActionsInCompactView(0, 1)
+            )
+        }
+
+        val notification = notificationBuilder.build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -264,6 +329,7 @@ class PlaybackService : MediaSessionService() {
             }
             player.play()
         }
+        startForegroundNotification()
     }
 
     fun toggleMute() {
@@ -271,6 +337,7 @@ class PlaybackService : MediaSessionService() {
         player.volume = if (isMuted) 0f else 1f
         showToast(if (isMuted) "Audio Muted" else "Audio Unmuted")
         updateNotificationLayout()
+        startForegroundNotification()
     }
 
     fun isAudioMuted(): Boolean {
@@ -280,9 +347,8 @@ class PlaybackService : MediaSessionService() {
     private fun updateNotificationLayout() {
         val mediaSessionInstance = mediaSession ?: return
         val muteCommand = SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY)
-        val muteButton = CommandButton.Builder()
+        val muteButton = CommandButton.Builder(if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp)
             .setSessionCommand(muteCommand)
-            .setIconResId(if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp)
             .setDisplayName(if (isMuted) "Unmute" else "Mute")
             .setEnabled(true)
             .build()
@@ -315,13 +381,15 @@ class PlaybackService : MediaSessionService() {
                 val jsonStr = response.body?.string() ?: ""
                 val json = JSONObject(jsonStr)
                 val nowPlaying = json.optString("nowplaying", "").trim()
-                var artist = json.optString("currenttrack_artist", "").trim()
-                var title = json.optString("currenttrack_title", "").trim()
+                val rawArtist = json.optString("currenttrack_artist", "").trim()
+                val rawTitle = json.optString("currenttrack_title", "").trim()
                 val nextTrack = json.optString("nexttrack", "").trim()
 
-                val nowPlayingChanged = (nowPlaying != lastNowPlaying)
+                val trackInfo = MetadataParser.parseTrackInfo(nowPlaying, rawArtist, rawTitle, nextTrack)
 
-                if (!nowPlayingChanged && nextTrack == lastNextTrack) {
+                val nowPlayingChanged = (trackInfo.nowPlaying != lastNowPlaying)
+
+                if (!nowPlayingChanged && trackInfo.nextTrack == lastNextTrack) {
                     return@use
                 }
 
@@ -330,22 +398,18 @@ class PlaybackService : MediaSessionService() {
                     delay(1000)
                 }
 
-                lastNowPlaying = nowPlaying
-                lastNextTrack = nextTrack
+                lastNowPlaying = trackInfo.nowPlaying
+                lastNextTrack = trackInfo.nextTrack
 
                 val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
 
-                if (artist.isBlank() || title.isBlank()) {
-                    if (nowPlaying.contains(" - ")) {
-                        val parts = nowPlaying.split(" - ", limit = 2)
-                        if (artist.isBlank()) artist = parts[0].trim()
-                        if (title.isBlank()) title = parts[1].trim()
-                    } else {
-                        if (title.isBlank()) title = nowPlaying
-                    }
+                val displayTitle = if (trackInfo.nowPlaying.isNotBlank()) {
+                    trackInfo.nowPlaying
+                } else if (trackInfo.title.isNotBlank() && trackInfo.artist.isNotBlank()) {
+                    "${trackInfo.artist} - ${trackInfo.title}"
+                } else {
+                    trackInfo.title
                 }
-
-                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
                 val timestampedArtworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
                 val artworkUri = Uri.parse(timestampedArtworkUrl)
@@ -365,18 +429,25 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 val extras = Bundle().apply {
-                    putString("next_track", nextTrack)
+                    putString("next_track", trackInfo.nextTrack)
                 }
 
                 val metadataBuilder = MediaMetadata.Builder()
-                    .setTitle(if (title.isNotBlank()) title else displayTitle)
-                    .setArtist(artist)
+                    .setTitle(if (trackInfo.title.isNotBlank()) trackInfo.title else displayTitle)
+                    .setArtist(trackInfo.artist)
                     .setArtworkUri(artworkUri)
                     .setDisplayTitle(displayTitle)
                     .setExtras(extras)
 
                 if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
                     metadataBuilder.setArtworkData(artworkBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                    try {
+                        currentArtworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes!!.size)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                } else {
+                    currentArtworkBitmap = null
                 }
 
                 val updatedMetadata = metadataBuilder.build()
@@ -393,6 +464,19 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
         return mediaSession
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        pollingJob?.cancel()
+        player.stop()
+        player.release()
+        mediaSession?.run {
+            release()
+            mediaSession = null
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     override fun onDestroy() {

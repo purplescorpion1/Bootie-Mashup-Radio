@@ -156,6 +156,18 @@ class MainActivity : AppCompatActivity() {
         releaseMediaController()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isFinishing) {
+            try {
+                val stopServiceIntent = Intent(this, PlaybackService::class.java)
+                stopService(stopServiceIntent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private fun connectToMediaSession() {
         val sessionToken = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         mediaControllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
@@ -371,13 +383,15 @@ class MainActivity : AppCompatActivity() {
                             val jsonStr = response.body?.string() ?: ""
                             val json = JSONObject(jsonStr)
                             val nowPlaying = json.optString("nowplaying", "").trim()
-                            var artist = json.optString("currenttrack_artist", "").trim()
-                            var title = json.optString("currenttrack_title", "").trim()
+                            val rawArtist = json.optString("currenttrack_artist", "").trim()
+                            val rawTitle = json.optString("currenttrack_title", "").trim()
                             val nextTrack = json.optString("nexttrack", "").trim()
 
-                            val nowPlayingChanged = (nowPlaying != lastUiNowPlaying)
+                            val trackInfo = MetadataParser.parseTrackInfo(nowPlaying, rawArtist, rawTitle, nextTrack)
 
-                            if (!nowPlayingChanged && nextTrack == lastUiNextTrack) {
+                            val nowPlayingChanged = (trackInfo.nowPlaying != lastUiNowPlaying)
+
+                            if (!nowPlayingChanged && trackInfo.nextTrack == lastUiNextTrack) {
                                 return@use
                             }
 
@@ -386,22 +400,18 @@ class MainActivity : AppCompatActivity() {
                                 delay(1000)
                             }
 
-                            lastUiNowPlaying = nowPlaying
-                            lastUiNextTrack = nextTrack
+                            lastUiNowPlaying = trackInfo.nowPlaying
+                            lastUiNextTrack = trackInfo.nextTrack
 
                             val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
 
-                            if (artist.isBlank() || title.isBlank()) {
-                                if (nowPlaying.contains(" - ")) {
-                                    val parts = nowPlaying.split(" - ", limit = 2)
-                                    if (artist.isBlank()) artist = parts[0].trim()
-                                    if (title.isBlank()) title = parts[1].trim()
-                                } else {
-                                    if (title.isBlank()) title = nowPlaying
-                                }
+                            val displayText = if (trackInfo.nowPlaying.isNotBlank()) {
+                                trackInfo.nowPlaying
+                            } else if (trackInfo.title.isNotBlank() && trackInfo.artist.isNotBlank()) {
+                                "${trackInfo.artist} - ${trackInfo.title}"
+                            } else {
+                                trackInfo.title
                             }
-
-                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
 
                             withContext(Dispatchers.Main) {
                                 if (displayText.isNotEmpty()) {
@@ -410,8 +420,8 @@ class MainActivity : AppCompatActivity() {
 
                                 tvNextTrackLabel.visibility = View.VISIBLE
                                 tvNextTrack.visibility = View.VISIBLE
-                                if (nextTrack.isNotEmpty()) {
-                                    tvNextTrack.text = nextTrack
+                                if (trackInfo.nextTrack.isNotEmpty()) {
+                                    tvNextTrack.text = trackInfo.nextTrack
                                 } else {
                                     tvNextTrack.text = "Bootie Mashup Radio"
                                 }
