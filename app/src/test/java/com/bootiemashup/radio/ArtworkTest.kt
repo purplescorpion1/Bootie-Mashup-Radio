@@ -1,11 +1,13 @@
 package com.bootiemashup.radio
 
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CopyOnWriteArraySet
 
 class ArtworkTest {
 
@@ -78,6 +80,31 @@ class ArtworkTest {
         assertEquals("Bootie Mashup Radio", metadata.albumArtist?.toString())
         assertEquals("Martinn - Boys Of Power (Coldplay vs. Don Henley)", metadata.displayTitle?.toString())
         assertEquals(MediaMetadata.MEDIA_TYPE_MUSIC, metadata.mediaType)
+    }
+
+    @Test
+    fun testSessionListenerNotification() {
+        val listeners = CopyOnWriteArraySet<Player.Listener>()
+        var receivedTitle: String? = null
+
+        val listener = object : Player.Listener {
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                receivedTitle = mediaMetadata.title?.toString()
+            }
+        }
+
+        listeners.add(listener)
+
+        val updatedMetadata = MediaMetadata.Builder()
+            .setTitle("Live Radio Track")
+            .setArtist("Bootie Mashup Artist")
+            .build()
+
+        for (l in listeners) {
+            l.onMediaMetadataChanged(updatedMetadata)
+        }
+
+        assertEquals("Live Radio Track", receivedTitle)
     }
 
     @Test

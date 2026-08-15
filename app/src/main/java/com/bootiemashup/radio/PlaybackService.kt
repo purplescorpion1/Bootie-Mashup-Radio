@@ -67,6 +67,21 @@ class PlaybackService : MediaSessionService() {
     private var lastNextTrack: String = ""
     private var lastArtworkUrl: String = ""
 
+    private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+
+    private fun notifySessionMetadataChanged(metadata: MediaMetadata) {
+        Handler(Looper.getMainLooper()).post {
+            for (listener in sessionListeners) {
+                try {
+                    listener.onMediaMetadataChanged(metadata)
+                    listener.onPlaylistMetadataChanged(metadata)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     private val okHttpBitmapLoader = object : BitmapLoader {
         override fun supportsMimeType(mimeType: String): Boolean = true
 
@@ -220,6 +235,16 @@ class PlaybackService : MediaSessionService() {
 
         // Create ForwardingPlayer so MediaSession delegates getMediaMetadata to currentPolledMetadata
         val sessionPlayer = object : ForwardingPlayer(player) {
+            override fun addListener(listener: Player.Listener) {
+                sessionListeners.add(listener)
+                super.addListener(listener)
+            }
+
+            override fun removeListener(listener: Player.Listener) {
+                sessionListeners.remove(listener)
+                super.removeListener(listener)
+            }
+
             override fun getMediaMetadata(): MediaMetadata {
                 return currentPolledMetadata ?: super.getMediaMetadata()
             }
@@ -494,6 +519,7 @@ class PlaybackService : MediaSessionService() {
 
                 withContext(Dispatchers.Main) {
                     player.playlistMetadata = updatedMetadata
+                    notifySessionMetadataChanged(updatedMetadata)
                     startForegroundNotification()
                 }
             }
