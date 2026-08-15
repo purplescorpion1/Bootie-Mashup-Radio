@@ -14,7 +14,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
@@ -23,6 +25,11 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -41,7 +49,37 @@ class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
-    private val okHttpClient = OkHttpClient()
+    companion object {
+        val okHttpClient: OkHttpClient by lazy {
+            val trustAllCerts = arrayOf<TrustManager>(
+                object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }
+            )
+
+            val sslContext = SSLContext.getInstance("SSL").apply {
+                init(null, trustAllCerts, SecureRandom())
+            }
+
+            val headerInterceptor = Interceptor { chain ->
+                val originalRequest = chain.request()
+                val requestWithHeaders = originalRequest.newBuilder()
+                    .header("Origin", "https://bootiemashup.com")
+                    .header("Referer", "https://bootiemashup.com/")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0")
+                    .build()
+                chain.proceed(requestWithHeaders)
+            }
+
+            OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+                .addInterceptor(headerInterceptor)
+                .build()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -53,9 +91,14 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
 
-        // Create player with track selector
+        val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(okHttpDataSourceFactory)
+
+        // Create player with track selector and okhttp media source factory
         player = ExoPlayer.Builder(this)
             .setTrackSelector(trackSelector)
+            .setMediaSourceFactory(mediaSourceFactory)
             .build()
 
         // Handle audio focus automatically
@@ -164,24 +207,37 @@ class PlaybackService : MediaSessionService() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                delay(10000) // Poll every 10 seconds
+                delay(5000) // Poll every 5 seconds
             }
         }
     }
 
     private suspend fun fetchAndUpdateMetadata() {
         val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205&nl=1")
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
                 val jsonStr = response.body?.string() ?: ""
                 val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "Bootie Mashup Radio")
-                val artist = json.optString("currenttrack_artist", "Bootie Mashup Radio")
-                val title = json.optString("currenttrack_title", "Live Stream")
+                val nowPlaying = json.optString("nowplaying", "")
+                var artist = json.optString("currenttrack_artist", "")
+                var title = json.optString("currenttrack_title", "")
                 val nextTrack = json.optString("nexttrack", "")
+
+                if (artist.isBlank() || title.isBlank()) {
+                    if (nowPlaying.contains(" - ")) {
+                        val parts = nowPlaying.split(" - ", limit = 2)
+                        if (artist.isBlank()) artist = parts[0].trim()
+                        if (title.isBlank()) title = parts[1].trim()
+                    } else {
+                        if (title.isBlank()) title = if (nowPlaying.isNotBlank()) nowPlaying else "Live Stream"
+                        if (artist.isBlank()) artist = "Bootie Mashup Radio"
+                    }
+                }
+
+                val displayTitle = if (nowPlaying.isNotBlank()) nowPlaying else "$artist - $title"
 
                 withContext(Dispatchers.Main) {
                     val artworkUri = Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg?_=" + System.currentTimeMillis())
@@ -195,7 +251,7 @@ class PlaybackService : MediaSessionService() {
                         .setArtist(artist)
                         .setAlbumTitle("Bootie Mashup Radio")
                         .setArtworkUri(artworkUri)
-                        .setDisplayTitle(nowPlaying)
+                        .setDisplayTitle(displayTitle)
                         .setExtras(extras)
                         .build()
 
