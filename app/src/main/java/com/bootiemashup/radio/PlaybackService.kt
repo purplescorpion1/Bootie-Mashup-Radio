@@ -360,9 +360,13 @@ class PlaybackService : MediaSessionService() {
 
     private fun updateNotificationLayout() {
         val mediaSessionInstance = mediaSession ?: return
+        val iconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
         val muteCommand = SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY)
-        val muteButton = CommandButton.Builder(if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp)
+        @Suppress("DEPRECATION")
+        val muteButton = CommandButton.Builder()
             .setSessionCommand(muteCommand)
+            .setIconResId(iconRes)
+            .setCustomIconResId(iconRes)
             .setDisplayName(if (isMuted) "Unmute" else "Mute")
             .setEnabled(true)
             .build()
