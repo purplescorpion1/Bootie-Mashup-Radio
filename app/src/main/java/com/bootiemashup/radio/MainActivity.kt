@@ -123,6 +123,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Prompt user to disable battery optimizations if currently optimizing
+        checkBatteryOptimization()
+
         // Setup button listeners
         btnPlayPause.setOnClickListener {
             togglePlayback()
@@ -213,7 +216,9 @@ class MainActivity : AppCompatActivity() {
         // Initial UI sync
         updatePlayPauseUI(controller.playWhenReady)
         updateMuteUI(controller.volume == 0f)
-        if (controller.playlistMetadata.displayTitle != null || controller.playlistMetadata.title != null) {
+        val initialTitle = controller.playlistMetadata.displayTitle?.toString()
+            ?: controller.playlistMetadata.title?.toString()
+        if (!initialTitle.isNullOrBlank() && initialTitle != "Bootie Mashup Radio") {
             updateTrackMetadataUI(controller.playlistMetadata)
         }
     }
@@ -386,7 +391,8 @@ class MainActivity : AppCompatActivity() {
                             var title = json.optString("currenttrack_title", "").trim()
                             val nextTrack = json.optString("nexttrack", "").trim()
 
-                            val nowPlayingChanged = (nowPlaying != lastUiNowPlaying)
+                            val isDefaultPlaceholder = tvTrackTitle.text.toString().trim() == "Bootie Mashup Radio"
+                            val nowPlayingChanged = (nowPlaying != lastUiNowPlaying) || isDefaultPlaceholder
 
                             if (!nowPlayingChanged && nextTrack == lastUiNextTrack) {
                                 return@use
@@ -442,6 +448,22 @@ class MainActivity : AppCompatActivity() {
     private fun stopUiPolling() {
         uiPollingJob?.cancel()
         uiPollingJob = null
+    }
+
+    private fun checkBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     private fun isAndroidTV(): Boolean {
