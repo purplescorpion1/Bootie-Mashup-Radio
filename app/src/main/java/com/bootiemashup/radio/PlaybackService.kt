@@ -318,6 +318,7 @@ class PlaybackService : MediaSessionService() {
                         showToast("Audio Paused")
                     }
                 }
+                updateNotificationLayout()
             }
 
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
@@ -337,7 +338,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundNotification()
-        return super.onStartCommand(intent, flags, startId)
+        super.onStartCommand(intent, flags, startId)
+        return START_STICKY
     }
 
     private fun createNotificationChannel() {
@@ -399,6 +401,7 @@ class PlaybackService : MediaSessionService() {
         if (session != null) {
             notificationBuilder.setStyle(
                 MediaStyleNotificationHelper.MediaStyle(session)
+                    .setShowActionsInCompactView(0, 1)
             )
         }
 
@@ -426,6 +429,7 @@ class PlaybackService : MediaSessionService() {
             }
             player.play()
         }
+        updateNotificationLayout()
     }
 
     fun toggleMute() {
@@ -441,18 +445,32 @@ class PlaybackService : MediaSessionService() {
 
     private fun updateNotificationLayout() {
         val mediaSessionInstance = mediaSession ?: return
+
+        val isPlaying = player.playWhenReady
+        val playPauseCommand = SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY)
+        val playPauseIconRes = if (isPlaying) R.drawable.ic_pause_white_24dp else R.drawable.ic_play_arrow_white_24dp
+        @Suppress("DEPRECATION")
+        val playPauseButton = CommandButton.Builder()
+            .setSessionCommand(playPauseCommand)
+            .setIconResId(playPauseIconRes)
+            .setCustomIconResId(playPauseIconRes)
+            .setDisplayName(if (isPlaying) "Pause" else "Play")
+            .setEnabled(true)
+            .build()
+
         val muteCommand = SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY)
-        val iconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
+        val muteIconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
+        @Suppress("DEPRECATION")
         val muteButton = CommandButton.Builder()
             .setSessionCommand(muteCommand)
-            .setIconResId(iconRes)
-            .setCustomIconResId(iconRes)
+            .setIconResId(muteIconRes)
+            .setCustomIconResId(muteIconRes)
             .setDisplayName(if (isMuted) "Unmute" else "Mute")
             .setEnabled(true)
             .build()
 
         // MediaSession custom buttons in MediaStyle notification
-        mediaSessionInstance.setCustomLayout(listOf(muteButton))
+        mediaSessionInstance.setCustomLayout(listOf(playPauseButton, muteButton))
     }
 
     private fun startMetadataPolling() {
@@ -484,7 +502,7 @@ class PlaybackService : MediaSessionService() {
                 var title = json.optString("currenttrack_title", "").trim()
                 val nextTrack = json.optString("nexttrack", "").trim()
 
-                val nowPlayingChanged = (nowPlaying != lastNowPlaying)
+                val nowPlayingChanged = (nowPlaying != lastNowPlaying) || (currentPolledMetadata == null)
 
                 if (!nowPlayingChanged && nextTrack == lastNextTrack) {
                     return@use
