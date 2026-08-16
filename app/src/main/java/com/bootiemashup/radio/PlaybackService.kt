@@ -22,6 +22,7 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -60,6 +61,7 @@ class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
+    private lateinit var sessionPlayer: ForwardingPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
@@ -71,8 +73,12 @@ class PlaybackService : MediaSessionService() {
 
     private fun notifySessionMetadataChanged(metadata: MediaMetadata) {
         Handler(Looper.getMainLooper()).post {
+            val timeline = sessionPlayer.currentTimeline
+            val activeItem = sessionPlayer.currentMediaItem
             for (listener in sessionListeners) {
                 try {
+                    listener.onTimelineChanged(timeline, Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
+                    listener.onMediaItemTransition(activeItem, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
                     listener.onMediaMetadataChanged(metadata)
                     listener.onPlaylistMetadataChanged(metadata)
                 } catch (e: Exception) {
@@ -233,8 +239,8 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create ForwardingPlayer so MediaSession delegates getCurrentMediaItem, getMediaMetadata, and getPlaylistMetadata to currentPolledMetadata
-        val sessionPlayer = object : ForwardingPlayer(player) {
+        // Create ForwardingPlayer so MediaSession delegates getCurrentTimeline, getCurrentMediaItem, getMediaMetadata, and getPlaylistMetadata to currentPolledMetadata
+        sessionPlayer = object : ForwardingPlayer(player) {
             override fun addListener(listener: Player.Listener) {
                 sessionListeners.add(listener)
                 super.addListener(listener)
@@ -243,6 +249,26 @@ class PlaybackService : MediaSessionService() {
             override fun removeListener(listener: Player.Listener) {
                 sessionListeners.remove(listener)
                 super.removeListener(listener)
+            }
+
+            override fun getCurrentTimeline(): Timeline {
+                val timeline = super.getCurrentTimeline()
+                if (timeline.isEmpty) return timeline
+                val metadata = currentPolledMetadata ?: return timeline
+                return object : Timeline() {
+                    override fun getWindowCount(): Int = timeline.windowCount
+                    override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+                        val w = timeline.getWindow(windowIndex, window, defaultPositionProjectionUs)
+                        w.mediaItem = w.mediaItem.buildUpon().setMediaMetadata(metadata).build()
+                        return w
+                    }
+                    override fun getPeriodCount(): Int = timeline.periodCount
+                    override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+                        return timeline.getPeriod(periodIndex, period, setIds)
+                    }
+                    override fun getIndexOfPeriod(uid: Any): Int = timeline.getIndexOfPeriod(uid)
+                    override fun getUidOfPeriod(periodIndex: Int): Any = timeline.getUidOfPeriod(periodIndex)
+                }
             }
 
             override fun getCurrentMediaItem(): MediaItem? {
