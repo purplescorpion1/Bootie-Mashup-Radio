@@ -137,6 +137,9 @@ class PlaybackService : MediaSessionService() {
         }
     }
     companion object {
+        const val ACTION_TOGGLE_PLAY_PAUSE = "com.bootiemashup.radio.ACTION_TOGGLE_PLAY_PAUSE"
+        const val ACTION_TOGGLE_MUTE = "com.bootiemashup.radio.ACTION_TOGGLE_MUTE"
+
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
                 object : X509TrustManager {
@@ -290,6 +293,22 @@ class PlaybackService : MediaSessionService() {
             override fun getPlaylistMetadata(): MediaMetadata {
                 return currentPolledMetadata ?: super.getPlaylistMetadata()
             }
+
+            override fun play() {
+                if (!player.playWhenReady) {
+                    player.stop()
+                    player.prepare()
+                }
+                super.play()
+            }
+
+            override fun setPlayWhenReady(playWhenReady: Boolean) {
+                if (playWhenReady && !player.playWhenReady) {
+                    player.stop()
+                    player.prepare()
+                }
+                super.setPlayWhenReady(playWhenReady)
+            }
         }
 
         // Create MediaSession with session activity and custom BitmapLoader using sessionPlayer
@@ -337,7 +356,17 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundNotification()
+        when (intent?.action) {
+            ACTION_TOGGLE_PLAY_PAUSE -> {
+                togglePlayPause()
+            }
+            ACTION_TOGGLE_MUTE -> {
+                toggleMute()
+            }
+            else -> {
+                startForegroundNotification()
+            }
+        }
         super.onStartCommand(intent, flags, startId)
         return START_STICKY
     }
@@ -383,6 +412,41 @@ class PlaybackService : MediaSessionService() {
             artworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size)
         }
 
+        val isPlaying = player.playWhenReady
+        val playPauseIntent = Intent(this, PlaybackService::class.java).apply {
+            action = ACTION_TOGGLE_PLAY_PAUSE
+        }
+        val playPausePendingIntent = PendingIntent.getService(
+            this,
+            1,
+            playPauseIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val playPauseIconRes = if (isPlaying) R.drawable.ic_pause_white_24dp else R.drawable.ic_play_arrow_white_24dp
+        val playPauseTitle = if (isPlaying) "Pause" else "Play"
+        val playPauseAction = NotificationCompat.Action.Builder(
+            playPauseIconRes,
+            playPauseTitle,
+            playPausePendingIntent
+        ).build()
+
+        val muteIntent = Intent(this, PlaybackService::class.java).apply {
+            action = ACTION_TOGGLE_MUTE
+        }
+        val mutePendingIntent = PendingIntent.getService(
+            this,
+            2,
+            muteIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val muteIconRes = if (isMuted) R.drawable.ic_volume_off_white_24dp else R.drawable.ic_volume_up_white_24dp
+        val muteTitle = if (isMuted) "Unmute" else "Mute"
+        val muteAction = NotificationCompat.Action.Builder(
+            muteIconRes,
+            muteTitle,
+            mutePendingIntent
+        ).build()
+
         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
@@ -392,6 +456,8 @@ class PlaybackService : MediaSessionService() {
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(playPauseAction)
+            .addAction(muteAction)
 
         if (artworkBitmap != null) {
             notificationBuilder.setLargeIcon(artworkBitmap)
@@ -424,9 +490,8 @@ class PlaybackService : MediaSessionService() {
         if (player.playWhenReady) {
             player.pause()
         } else {
-            if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
-                player.prepare()
-            }
+            player.stop()
+            player.prepare()
             player.play()
         }
         updateNotificationLayout()
@@ -471,6 +536,9 @@ class PlaybackService : MediaSessionService() {
 
         // MediaSession custom buttons in MediaStyle notification
         mediaSessionInstance.setCustomLayout(listOf(playPauseButton, muteButton))
+
+        // Also update foreground notification actions
+        startForegroundNotification()
     }
 
     private fun startMetadataPolling() {
