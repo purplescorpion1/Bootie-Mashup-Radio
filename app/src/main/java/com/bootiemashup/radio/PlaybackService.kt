@@ -323,9 +323,7 @@ class PlaybackService : MediaSessionService() {
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
                 // Ensure stream ICY metadata does not overwrite polled metadata
                 currentPolledMetadata?.let { polled ->
-                    if (player.playlistMetadata != polled) {
-                        player.playlistMetadata = polled
-                    }
+                    notifySessionMetadataChanged(polled)
                 }
             }
         })
