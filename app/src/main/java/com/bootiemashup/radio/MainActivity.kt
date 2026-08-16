@@ -1,10 +1,12 @@
 package com.bootiemashup.radio
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -112,6 +114,13 @@ class MainActivity : AppCompatActivity() {
             mediaRouteButton.onFocusChangeListener = focusChangeListener
 
             btnPlayPause.requestFocus()
+        }
+
+        // Request POST_NOTIFICATIONS permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
         }
 
         // Setup button listeners
@@ -338,9 +347,10 @@ class MainActivity : AppCompatActivity() {
                     .build()
 
                 PlaybackService.okHttpClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val bytes = response.body?.bytes()
-                        if (bytes != null && bytes.isNotEmpty()) {
+                    val body = response.body
+                    if (response.isSuccessful && body != null) {
+                        val bytes = body.bytes()
+                        if (bytes.isNotEmpty()) {
                             val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             if (bitmap != null) {
                                 withContext(Dispatchers.Main) {
@@ -367,8 +377,9 @@ class MainActivity : AppCompatActivity() {
                         .build()
 
                     PlaybackService.okHttpClient.newCall(request).execute().use { response ->
-                        if (response.isSuccessful) {
-                            val jsonStr = response.body?.string() ?: ""
+                        val body = response.body
+                        if (response.isSuccessful && body != null) {
+                            val jsonStr = body.string()
                             val json = JSONObject(jsonStr)
                             val nowPlaying = json.optString("nowplaying", "").trim()
                             var artist = json.optString("currenttrack_artist", "").trim()
