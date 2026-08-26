@@ -69,6 +69,8 @@ class PlaybackService : MediaSessionService() {
     private var lastNextTrack: String = ""
     private var lastArtworkUrl: String = ""
 
+    private var currentStreamUrl: String = PRIMARY_STREAM_URL
+
     private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
 
     private fun notifySessionMetadataChanged(metadata: MediaMetadata) {
@@ -137,8 +139,24 @@ class PlaybackService : MediaSessionService() {
         }
     }
     companion object {
+        const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
+        const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm/stream/205"
+
         const val ACTION_TOGGLE_PLAY_PAUSE = "com.bootiemashup.radio.ACTION_TOGGLE_PLAY_PAUSE"
         const val ACTION_TOGGLE_MUTE = "com.bootiemashup.radio.ACTION_TOGGLE_MUTE"
+
+        fun checkStreamUrlValid(url: String): Boolean {
+            return try {
+                val request = Request.Builder()
+                    .url(url)
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    response.isSuccessful
+                }
+            } catch (e: Exception) {
+                false
+            }
+        }
 
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
@@ -203,13 +221,6 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.setAudioAttributes(audioAttributes, true)
 
-        // Set up MediaItem
-        val mediaItem = MediaItem.Builder()
-            .setUri("https://c7.radioboss.fm:18205/stream")
-            .setMediaId("bootie_mashup_stream")
-            .build()
-        player.setMediaItem(mediaItem)
-
         // Initial Metadata setup
         val initialMetadata = MediaMetadata.Builder()
             .setTitle("Bootie Mashup Radio")
@@ -222,7 +233,7 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         val initialMediaItem = MediaItem.Builder()
-            .setUri("https://c7.radioboss.fm:18205/stream")
+            .setUri(currentStreamUrl)
             .setMediaId("bootie_mashup_stream")
             .setMediaMetadata(initialMetadata)
             .build()
@@ -340,6 +351,13 @@ class PlaybackService : MediaSessionService() {
                 updateNotificationLayout()
             }
 
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                super.onPlayerError(error)
+                if (currentStreamUrl == PRIMARY_STREAM_URL) {
+                    switchToFallbackStream()
+                }
+            }
+
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
                 // Ensure stream ICY metadata does not overwrite polled metadata
                 currentPolledMetadata?.let { polled ->
@@ -347,6 +365,9 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         })
+
+        // Validate stream reachability asynchronously and fall back if primary is non-functional
+        checkAndSelectStreamUrl()
 
         // Start background metadata and artwork polling
         startMetadataPolling()
@@ -506,6 +527,33 @@ class PlaybackService : MediaSessionService() {
 
     fun isAudioMuted(): Boolean {
         return isMuted
+    }
+
+    private fun checkAndSelectStreamUrl() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val primaryValid = checkStreamUrlValid(PRIMARY_STREAM_URL)
+            if (!primaryValid) {
+                withContext(Dispatchers.Main) {
+                    switchToFallbackStream()
+                }
+            }
+        }
+    }
+
+    private fun switchToFallbackStream() {
+        if (currentStreamUrl == FALLBACK_STREAM_URL) return
+        currentStreamUrl = FALLBACK_STREAM_URL
+        val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
+        val fallbackMediaItem = MediaItem.Builder()
+            .setUri(FALLBACK_STREAM_URL)
+            .setMediaId("bootie_mashup_stream")
+            .setMediaMetadata(currentMetadata)
+            .build()
+        player.setMediaItem(fallbackMediaItem)
+        player.prepare()
+        if (player.playWhenReady) {
+            player.play()
+        }
     }
 
     private fun updateNotificationLayout() {
