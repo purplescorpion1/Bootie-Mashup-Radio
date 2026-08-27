@@ -139,8 +139,8 @@ class PlaybackService : MediaSessionService() {
         }
     }
     companion object {
-        const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
-        const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm/stream/205"
+        const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm/stream/205"
+        const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
 
         const val ACTION_TOGGLE_PLAY_PAUSE = "com.bootiemashup.radio.ACTION_TOGGLE_PLAY_PAUSE"
         const val ACTION_TOGGLE_MUTE = "com.bootiemashup.radio.ACTION_TOGGLE_MUTE"
