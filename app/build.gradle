@@ -12,8 +12,8 @@ android {
         applicationId "com.bootiemashup.radio"
         minSdkVersion 26
         targetSdkVersion 37
-        versionCode 7
-        versionName "2.4.1"
+        versionCode 8
+        versionName "2.4.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -46,7 +46,7 @@ dependencies {
     implementation 'androidx.leanback:leanback:1.2.0'
 
     // Media3 (ExoPlayer & Session) for foreground service playback
-    def media3_version = "1.11.0"
+    def media3_version = "1.11.1"
     implementation "androidx.media3:media3-exoplayer:$media3_version"
     implementation "androidx.media3:media3-session:$media3_version"
     implementation "androidx.media3:media3-ui:$media3_version"
