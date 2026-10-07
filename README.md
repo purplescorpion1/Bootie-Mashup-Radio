@@ -2,8 +2,12 @@
 
 Native Android and Android TV application for **Bootie Mashup Radio**, streaming the best mashups 24/7.
 
+---
+
 ## iOS and tvOS version
 The android version can be found [https://github.com/purplescorpion1/Bootie-Mashup-Radio](https://github.com/purplescorpion1/BootieMashupRadio-IOS)
+
+---
 
 ## Features
 <p>This will work on any android device (mobile or TV) running android 8 or above</p>
@@ -26,6 +30,8 @@ The android version can be found [https://github.com/purplescorpion1/Bootie-Mash
 
 <p>Android TV</p>
 <img src="/Preview/BM_Radio_2.0_TV.png" alt="drawing" width="500"/>
+
+---
 
 <h3>Download The App</h3>
 <p>
