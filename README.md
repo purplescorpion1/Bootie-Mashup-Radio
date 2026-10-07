@@ -3,6 +3,7 @@
 ## iOS and tvOS version
 The android version can be found [https://github.com/purplescorpion1/Bootie-Mashup-Radio](https://github.com/purplescorpion1/BootieMashupRadio-IOS)
 
+## Features
 <p>This will work on any android device (mobile or TV) running android 8 or above</p>
 
 <p>Important - If the app stops when you have the screen off please disable battery optimization for the app in your phone settings</p>
