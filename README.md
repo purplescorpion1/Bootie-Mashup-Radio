@@ -1,4 +1,6 @@
-<h2>App to play radio stream from https://bootiemashup.com/ </h2>
+# Bootie Mashup Radio - Android Phones & Android TV
+
+Native Android and Android TV application for **Bootie Mashup Radio**, streaming the best mashups 24/7.
 
 ## iOS and tvOS version
 The android version can be found [https://github.com/purplescorpion1/Bootie-Mashup-Radio](https://github.com/purplescorpion1/BootieMashupRadio-IOS)
