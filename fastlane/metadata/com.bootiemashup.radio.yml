@@ -1,0 +1,10 @@
+RepoType: git
+Repo: https://github.com/purplescorpion1/Bootie-Mashup-Radio
+
+Builds:
+  - versionName: 2.4.2
+    versionCode: 8
+    commit: d2e452ab5809e0c81a63b3f78e111bec03f7317b
+    subdir: app
+    gradle:
+      - yes
