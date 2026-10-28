@@ -1,0 +1,15 @@
+Native Android and Android TV application for Bootie Mashup Radio, streaming mashups 24/7.
+
+Designed for Android phones, tablets and TV devices running Android 8.0 or later.
+
+<b>Important:</b> If playback stops when your screen is off, try disabling battery optimisation for Bootie Mashup Radio in your device settings.
+
+<ul>
+<li>🎧 <b>24/7 High-Quality Audio Streaming:</b> Automatic connection to the primary stream, with failover to a secondary stream if needed.</li>
+<li>📺 <b>Android Phone &amp; Android TV Support:</b> Designed for supported Android devices running Android 8.0 or later.</li>
+<li>📻 <b>Live Now Playing &amp; Coming Next Information:</b> Track, artist and upcoming track metadata updates every 5 seconds.</li>
+<li>🖼️ <b>Album Artwork Integration:</b> Album artwork updates from the stream feed, with fallback graphics when artwork is unavailable.</li>
+<li>🔊 <b>Playback &amp; Mute Controls:</b> Simple controls for play, pause and mute.</li>
+<li>📡 <b>Bluetooth &amp; Cast Support:</b> Listen through compatible Bluetooth devices, including headphones and car audio systems, and use supported Cast receivers where available.</li>
+<li>📱 <b>Background Playback &amp; Media Controls:</b> Control playback using Android media notifications, lock-screen controls and compatible connected devices.</li>
+</ul>
