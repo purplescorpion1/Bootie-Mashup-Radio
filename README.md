@@ -14,13 +14,15 @@ The android version can be found [https://github.com/purplescorpion1/Bootie-Mash
 
 <p>Important - If the app stops when you have the screen off please disable battery optimization for the app in your phone settings</p>
 
-- 🎧 **24/7 High Quality Audio Streaming**: Automatic primary stream connection with automatic seamless failover to secondary stream if needed.
-- 📺 **Android Phone & Android TV Support**: Full support for all Android devices (Android 8.0+).
-- 📻 **Live Now Playing & Coming Next Info**: Automatic metadata updates for current track, artist, and coming next track every 5 seconds.
-- 🖼️ **Album Artwork Integration**: Real-time album artwork updates fetched directly from the stream feed with smooth fallback graphics.
-- 🔊 **Mute / Unmute & Play / Pause Controls**: Simple, sleek touch controls matching the Android application layout.
-- 📡 **Cast & Bluetooth Support**: Control playback via connected Bluetooth devices (headphones, car audio, android auto) or stream to Cast receivers using the built-in route picker.
-- 📱 **Lock Screen, Control Center & Media Remote Control**: Full integration with Android `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` for remote playback control and background media playback.
+<ul>
+<li>🎧 <b>24/7 High-Quality Audio Streaming:</b> Automatic connection to the primary stream, with failover to a secondary stream if needed.</li>
+<li>📺 <b>Android Phone &amp; Android TV Support:</b> Designed for supported Android devices running Android 8.0 or later.</li>
+<li>📻 <b>Live Now Playing &amp; Coming Next Information:</b> Track, artist and upcoming track metadata updates every 5 seconds.</li>
+<li>🖼️ <b>Album Artwork Integration:</b> Album artwork updates from the stream feed, with fallback graphics when artwork is unavailable.</li>
+<li>🔊 <b>Playback &amp; Mute Controls:</b> Simple controls for play, pause and mute.</li>
+<li>📡 <b>Bluetooth &amp; Cast Support:</b> Listen through compatible Bluetooth devices, including headphones and car audio systems, and use supported Cast receivers where available.</li>
+<li>📱 <b>Background Playback &amp; Media Controls:</b> Control playback using Android media notifications, lock-screen controls and compatible connected devices.</li>
+</ul>
 
 ---
 
