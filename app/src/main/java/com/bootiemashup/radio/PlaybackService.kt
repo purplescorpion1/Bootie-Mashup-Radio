@@ -9,10 +9,12 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
@@ -70,6 +72,11 @@ class PlaybackService : MediaSessionService() {
     private var lastArtworkUrl: String = ""
 
     private var currentStreamUrl: String = PRIMARY_STREAM_URL
+    private var retryJob: Job? = null
+    private var isRetrying = false
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
 
@@ -139,11 +146,21 @@ class PlaybackService : MediaSessionService() {
         }
     }
     companion object {
-        const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm/stream/205"
-        const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm:8205/stream"
+        const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
+        const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm/stream/205"
 
         const val ACTION_TOGGLE_PLAY_PAUSE = "com.bootiemashup.radio.ACTION_TOGGLE_PLAY_PAUSE"
         const val ACTION_TOGGLE_MUTE = "com.bootiemashup.radio.ACTION_TOGGLE_MUTE"
+
+        fun determineSessionStream(primaryValid: Boolean, fallbackValid: Boolean): String {
+            return if (primaryValid) {
+                PRIMARY_STREAM_URL
+            } else if (fallbackValid) {
+                FALLBACK_STREAM_URL
+            } else {
+                PRIMARY_STREAM_URL
+            }
+        }
 
         fun checkStreamUrlValid(url: String): Boolean {
             return try {
@@ -332,6 +349,7 @@ class PlaybackService : MediaSessionService() {
         // Start Foreground Notification immediately to prevent ForegroundServiceDidNotStartInTimeException
         startForegroundNotification()
 
+        acquireLocks()
         player.prepare()
         player.playWhenReady = true
 
@@ -343,18 +361,32 @@ class PlaybackService : MediaSessionService() {
                 if (lastState != playWhenReady) {
                     lastState = playWhenReady
                     if (playWhenReady) {
+                        acquireLocks()
                         showToast("Audio Playing")
                     } else {
+                        releaseLocks()
+                        stopRetryLoop()
                         showToast("Audio Paused")
                     }
                 }
                 updateNotificationLayout()
             }
 
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                super.onPlaybackStateChanged(playbackState)
+                if (playbackState == Player.STATE_READY) {
+                    stopRetryLoop()
+                } else if (playbackState == Player.STATE_ENDED) {
+                    if (player.playWhenReady) {
+                        startRetryLoop()
+                    }
+                }
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 super.onPlayerError(error)
-                if (currentStreamUrl == PRIMARY_STREAM_URL) {
-                    switchToFallbackStream()
+                if (player.playWhenReady) {
+                    startRetryLoop()
                 }
             }
 
@@ -501,6 +533,62 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun acquireLocks() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = powerManager?.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "BootieMashupRadio::PlaybackWakeLock"
+                )?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24 hour safe max timeout
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            if (wifiLock == null) {
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL
+                }
+                wifiLock = wifiManager?.createWifiLock(wifiMode, "BootieMashupRadio::PlaybackWifiLock")?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wifiLock?.isHeld == false) {
+                wifiLock?.acquire()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun releaseLocks() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun showToast(msg: String) {
         Handler(Looper.getMainLooper()).post {
             Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
@@ -529,31 +617,67 @@ class PlaybackService : MediaSessionService() {
         return isMuted
     }
 
+    fun getSessionStreamUrl(): String {
+        return currentStreamUrl
+    }
+
     private fun checkAndSelectStreamUrl() {
         CoroutineScope(Dispatchers.IO).launch {
             val primaryValid = checkStreamUrlValid(PRIMARY_STREAM_URL)
-            if (!primaryValid) {
-                withContext(Dispatchers.Main) {
-                    switchToFallbackStream()
+            val fallbackValid = if (!primaryValid) checkStreamUrlValid(FALLBACK_STREAM_URL) else true
+            val chosenUrl = determineSessionStream(primaryValid, fallbackValid)
+            withContext(Dispatchers.Main) {
+                currentStreamUrl = chosenUrl
+                val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
+                val item = MediaItem.Builder()
+                    .setUri(chosenUrl)
+                    .setMediaId("bootie_mashup_stream")
+                    .setMediaMetadata(currentMetadata)
+                    .build()
+                player.setMediaItem(item)
+                player.prepare()
+                if (player.playWhenReady) {
+                    player.play()
                 }
             }
         }
     }
 
-    private fun switchToFallbackStream() {
-        if (currentStreamUrl == FALLBACK_STREAM_URL) return
-        currentStreamUrl = FALLBACK_STREAM_URL
-        val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
-        val fallbackMediaItem = MediaItem.Builder()
-            .setUri(FALLBACK_STREAM_URL)
-            .setMediaId("bootie_mashup_stream")
-            .setMediaMetadata(currentMetadata)
-            .build()
-        player.setMediaItem(fallbackMediaItem)
-        player.prepare()
-        if (player.playWhenReady) {
-            player.play()
+    private fun startRetryLoop() {
+        if (isRetrying) return
+        isRetrying = true
+        retryJob?.cancel()
+        retryJob = CoroutineScope(Dispatchers.Main).launch {
+            while (isActive && isRetrying && player.playWhenReady) {
+                delay(5000)
+                if (!isRetrying || !player.playWhenReady) break
+                // Retry connecting to the session's stream from live
+                try {
+                    player.stop()
+                    val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
+                    val item = MediaItem.Builder()
+                        .setUri(currentStreamUrl)
+                        .setMediaId("bootie_mashup_stream")
+                        .setMediaMetadata(currentMetadata)
+                        .build()
+                    player.setMediaItem(item)
+                    player.prepare()
+                    player.play()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
         }
+    }
+
+    private fun stopRetryLoop() {
+        isRetrying = false
+        retryJob?.cancel()
+        retryJob = null
+    }
+
+    fun isRetryingStream(): Boolean {
+        return isRetrying
     }
 
     private fun updateNotificationLayout() {
@@ -702,6 +826,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         pollingJob?.cancel()
+        stopRetryLoop()
+        releaseLocks()
         player.release()
         mediaSession?.run {
             release()
