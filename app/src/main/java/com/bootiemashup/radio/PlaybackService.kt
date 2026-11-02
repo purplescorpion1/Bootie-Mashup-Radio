@@ -20,11 +20,9 @@ import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.common.Timeline
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -56,20 +54,17 @@ import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
-    private lateinit var sessionPlayer: ForwardingPlayer
     private var isMuted = false
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
-    private var lastArtworkUrl: String = ""
 
     private var currentStreamUrl: String = PRIMARY_STREAM_URL
     private var retryJob: Job? = null
@@ -77,79 +72,6 @@ class PlaybackService : MediaSessionService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
-
-    private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
-
-    private fun notifySessionMetadataChanged(metadata: MediaMetadata) {
-        Handler(Looper.getMainLooper()).post {
-            val timeline = sessionPlayer.currentTimeline
-            val activeItem = sessionPlayer.currentMediaItem ?: sessionPlayer.getMediaItemAt(0)
-            for (listener in sessionListeners) {
-                try {
-                    listener.onTimelineChanged(timeline, Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
-                    listener.onMediaItemTransition(activeItem, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
-                    listener.onMediaMetadataChanged(metadata)
-                    listener.onPlaylistMetadataChanged(metadata)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-            updateMediaSessionCompatMetadata(metadata)
-        }
-    }
-
-    private fun updateMediaSessionCompatMetadata(metadata: MediaMetadata) {
-        try {
-            val sessionInstance = mediaSession ?: return
-            var artworkBitmap: Bitmap? = null
-            val artworkBytes = metadata.artworkData
-            if (artworkBytes != null && artworkBytes.isNotEmpty()) {
-                artworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size)
-            }
-
-            // Access sessionLegacyStub from MediaSessionImpl via reflection
-            val implField = sessionInstance.javaClass.getDeclaredField("impl").apply {
-                isAccessible = true
-            }
-            val sessionImpl = implField.get(sessionInstance) ?: return
-            val stubField = sessionImpl.javaClass.getDeclaredField("sessionLegacyStub").apply {
-                isAccessible = true
-            }
-            val sessionLegacyStub = stubField.get(sessionImpl) ?: return
-            val sessionCompatField = sessionLegacyStub.javaClass.getDeclaredField("sessionCompat").apply {
-                isAccessible = true
-            }
-            val sessionCompat = sessionCompatField.get(sessionLegacyStub) as? androidx.media3.session.legacy.MediaSessionCompat
-
-            if (sessionCompat != null) {
-                val mediaId = player.currentMediaItem?.mediaId ?: "bootie_mashup_stream"
-                val mediaUri = Uri.parse(currentStreamUrl)
-                val durationMs = -1L
-                val legacyConversionsClass = Class.forName("androidx.media3.session.LegacyConversions")
-                val convertMethod = legacyConversionsClass.getDeclaredMethod(
-                    "convertToMediaMetadataCompat",
-                    MediaMetadata::class.java,
-                    String::class.java,
-                    Uri::class.java,
-                    Long::class.javaPrimitiveType,
-                    Bitmap::class.java
-                ).apply {
-                    isAccessible = true
-                }
-                val compatMetadata = convertMethod.invoke(
-                    null,
-                    metadata,
-                    mediaId,
-                    mediaUri,
-                    durationMs,
-                    artworkBitmap
-                ) as? androidx.media3.session.legacy.MediaMetadataCompat
-                sessionCompat.setMetadata(compatMetadata)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 
     private val okHttpBitmapLoader = object : BitmapLoader {
         override fun supportsMimeType(mimeType: String): Boolean = true
@@ -199,6 +121,7 @@ class PlaybackService : MediaSessionService() {
             return null
         }
     }
+
     companion object {
         const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
         const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm/stream/205"
@@ -309,7 +232,7 @@ class PlaybackService : MediaSessionService() {
             .setMediaMetadata(initialMetadata)
             .build()
         player.setMediaItem(initialMediaItem)
-        player.setPlaylistMetadata(initialMetadata)
+        player.playlistMetadata = initialMetadata
 
         // Create PendingIntent to launch MainActivity when notification is tapped
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
@@ -324,84 +247,8 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // Create ForwardingPlayer so MediaSession delegates getCurrentTimeline, getCurrentMediaItem, getMediaMetadata, and getPlaylistMetadata to currentPolledMetadata
-        sessionPlayer = object : ForwardingPlayer(player) {
-            override fun getAvailableCommands(): Player.Commands {
-                return super.getAvailableCommands().buildUpon()
-                    .add(Player.COMMAND_GET_METADATA)
-                    .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
-                    .add(Player.COMMAND_GET_TIMELINE)
-                    .build()
-            }
-            override fun addListener(listener: Player.Listener) {
-                sessionListeners.add(listener)
-                super.addListener(listener)
-            }
-
-            override fun removeListener(listener: Player.Listener) {
-                sessionListeners.remove(listener)
-                super.removeListener(listener)
-            }
-
-            override fun getCurrentTimeline(): Timeline {
-                val timeline = super.getCurrentTimeline()
-                if (timeline.isEmpty) return timeline
-                val metadata = currentPolledMetadata ?: return timeline
-                return object : Timeline() {
-                    override fun getWindowCount(): Int = timeline.windowCount
-                    override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
-                        val w = timeline.getWindow(windowIndex, window, defaultPositionProjectionUs)
-                        w.mediaItem = w.mediaItem.buildUpon().setMediaMetadata(metadata).build()
-                        return w
-                    }
-                    override fun getPeriodCount(): Int = timeline.periodCount
-                    override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
-                        return timeline.getPeriod(periodIndex, period, setIds)
-                    }
-                    override fun getIndexOfPeriod(uid: Any): Int = timeline.getIndexOfPeriod(uid)
-                    override fun getUidOfPeriod(periodIndex: Int): Any = timeline.getUidOfPeriod(periodIndex)
-                }
-            }
-
-            override fun getCurrentMediaItem(): MediaItem? {
-                val item = super.getCurrentMediaItem() ?: return null
-                val metadata = currentPolledMetadata ?: return item
-                return item.buildUpon().setMediaMetadata(metadata).build()
-            }
-
-            override fun getMediaItemAt(index: Int): MediaItem {
-                val item = super.getMediaItemAt(index)
-                val metadata = currentPolledMetadata ?: return item
-                return item.buildUpon().setMediaMetadata(metadata).build()
-            }
-
-            override fun getMediaMetadata(): MediaMetadata {
-                return currentPolledMetadata ?: super.getMediaMetadata()
-            }
-
-            override fun getPlaylistMetadata(): MediaMetadata {
-                return currentPolledMetadata ?: super.getPlaylistMetadata()
-            }
-
-            override fun play() {
-                if (!player.playWhenReady) {
-                    player.stop()
-                    player.prepare()
-                }
-                super.play()
-            }
-
-            override fun setPlayWhenReady(playWhenReady: Boolean) {
-                if (playWhenReady && !player.playWhenReady) {
-                    player.stop()
-                    player.prepare()
-                }
-                super.setPlayWhenReady(playWhenReady)
-            }
-        }
-
-        // Create MediaSession with session activity and custom BitmapLoader using sessionPlayer
-        mediaSession = MediaSession.Builder(this, sessionPlayer)
+        // Native Media3 Setup directly using ExoPlayer instance
+        mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(pendingIntent)
             .setBitmapLoader(okHttpBitmapLoader)
             .setCallback(CustomCallback())
@@ -414,7 +261,7 @@ class PlaybackService : MediaSessionService() {
         player.prepare()
         player.playWhenReady = true
 
-        // Register player listener for toast messages on status changes and metadata persistence
+        // Register player listener for status updates
         player.addListener(object : Player.Listener {
             private var lastState: Boolean? = null
 
@@ -448,13 +295,6 @@ class PlaybackService : MediaSessionService() {
                 super.onPlayerError(error)
                 if (player.playWhenReady) {
                     startRetryLoop()
-                }
-            }
-
-            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-                // Ensure stream ICY metadata does not overwrite polled metadata
-                currentPolledMetadata?.let { polled ->
-                    notifySessionMetadataChanged(polled)
                 }
             }
         })
@@ -569,7 +409,7 @@ class PlaybackService : MediaSessionService() {
             .setContentTitle(title)
             .setContentText(artist)
             .setSubText("Bootie Mashup Radio")
-            .setContentIntent(pendingIntent)
+            .setContentIntent(mediaSession?.sessionActivity ?: pendingIntent)
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -598,8 +438,6 @@ class PlaybackService : MediaSessionService() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
-            // If already started as foreground, update via notificationManager
             notificationManager.notify(NOTIFICATION_ID, notification)
         }
         notificationManager.notify(NOTIFICATION_ID, notification)
@@ -854,14 +692,12 @@ class PlaybackService : MediaSessionService() {
 
                 withContext(Dispatchers.Main) {
                     player.playlistMetadata = updatedMetadata
-                    val currentItem = player.currentMediaItem
-                    if (currentItem != null) {
+                    player.currentMediaItem?.let { currentItem ->
                         val updatedItem = currentItem.buildUpon()
                             .setMediaMetadata(updatedMetadata)
                             .build()
                         player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
                     }
-                    notifySessionMetadataChanged(updatedMetadata)
                     startForegroundNotification()
                 }
             }
