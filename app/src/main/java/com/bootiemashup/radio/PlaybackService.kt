@@ -63,6 +63,7 @@ class PlaybackService : MediaSessionService() {
     private var isMuted = false
     private var pollingJob: Job? = null
     private var currentPolledMetadata: MediaMetadata? = null
+    private var currentArtworkBitmap: Bitmap? = null
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
 
@@ -77,7 +78,8 @@ class PlaybackService : MediaSessionService() {
         override fun supportsMimeType(mimeType: String): Boolean = true
 
         override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
-            val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            val processed = MetadataHelper.processArtworkBytes(data, MetadataHelper.MAX_ARTWORK_DIMENSION)
+            val bitmap = processed?.first ?: BitmapFactory.decodeByteArray(data, 0, data.size)
             return if (bitmap != null) {
                 Futures.immediateFuture(bitmap)
             } else {
@@ -94,7 +96,8 @@ class PlaybackService : MediaSessionService() {
                         val body = response.body
                         if (response.isSuccessful && body != null) {
                             val bytes = body.bytes()
-                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            val processed = MetadataHelper.processArtworkBytes(bytes, MetadataHelper.MAX_ARTWORK_DIMENSION)
+                            val bitmap = processed?.first ?: BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             if (bitmap != null) {
                                 future.set(bitmap)
                                 return@launch
@@ -128,6 +131,7 @@ class PlaybackService : MediaSessionService() {
 
         const val ACTION_TOGGLE_PLAY_PAUSE = "com.bootiemashup.radio.ACTION_TOGGLE_PLAY_PAUSE"
         const val ACTION_TOGGLE_MUTE = "com.bootiemashup.radio.ACTION_TOGGLE_MUTE"
+        const val ACTION_STOP = "com.bootiemashup.radio.ACTION_STOP"
 
         fun determineSessionStream(primaryValid: Boolean, fallbackValid: Boolean): String {
             return if (primaryValid) {
@@ -223,13 +227,14 @@ class PlaybackService : MediaSessionService() {
             .setAlbumArtist("Bootie Mashup Radio")
             .setDisplayTitle("Bootie Mashup Radio")
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-            .setArtworkUri(Uri.parse("https://c7.radioboss.fm/w/artwork/205.jpg"))
+            .setArtworkUri(Uri.parse(MetadataHelper.ARTWORK_BASE_URL))
             .build()
+        currentPolledMetadata = initialMetadata
 
+        // Initial MediaItem with EMPTY metadata so player.playlistMetadata drives player.mediaMetadata
         val initialMediaItem = MediaItem.Builder()
             .setUri(currentStreamUrl)
             .setMediaId("bootie_mashup_stream")
-            .setMediaMetadata(initialMetadata)
             .build()
         player.setMediaItem(initialMediaItem)
         player.playlistMetadata = initialMetadata
@@ -254,8 +259,11 @@ class PlaybackService : MediaSessionService() {
             .setCallback(CustomCallback())
             .build()
 
-        // Start Foreground Notification immediately to prevent ForegroundServiceDidNotStartInTimeException
-        startForegroundNotification()
+        // Keep notification visible even when player is buffering/idle
+        setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_ALWAYS)
+
+        // Start Foreground Notification immediately
+        updateForegroundNotification(startInForegroundRequired = true)
 
         acquireLocks()
         player.prepare()
@@ -320,12 +328,34 @@ class PlaybackService : MediaSessionService() {
             ACTION_TOGGLE_MUTE -> {
                 toggleMute()
             }
+            ACTION_STOP -> {
+                killService()
+                return START_NOT_STICKY
+            }
             else -> {
-                startForegroundNotification()
+                updateForegroundNotification(startInForegroundRequired = player.playWhenReady)
             }
         }
         super.onStartCommand(intent, flags, startId)
         return START_STICKY
+    }
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        updateForegroundNotification(startInForegroundRequired)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (!player.playWhenReady) {
+            killService()
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
+    private fun killService() {
+        stopRetryLoop()
+        releaseLocks()
+        player.stop()
+        stopSelf()
     }
 
     private fun createNotificationChannel() {
@@ -343,7 +373,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun startForegroundNotification() {
+    private fun updateForegroundNotification(startInForegroundRequired: Boolean = false) {
         createNotificationChannel()
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
@@ -358,16 +388,11 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val title = currentPolledMetadata?.title?.toString()
-            ?: currentPolledMetadata?.displayTitle?.toString()
+        val metadata = currentPolledMetadata ?: player.playlistMetadata
+        val title = metadata.title?.toString()
+            ?: metadata.displayTitle?.toString()
             ?: "Bootie Mashup Radio"
-        val artist = currentPolledMetadata?.artist?.toString() ?: "Live Stream"
-
-        var artworkBitmap: Bitmap? = null
-        val artworkBytes = currentPolledMetadata?.artworkData
-        if (artworkBytes != null && artworkBytes.isNotEmpty()) {
-            artworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size)
-        }
+        val artist = metadata.artist?.toString() ?: "Live Stream"
 
         val isPlaying = player.playWhenReady
         val playPauseIntent = Intent(this, PlaybackService::class.java).apply {
@@ -404,20 +429,31 @@ class PlaybackService : MediaSessionService() {
             mutePendingIntent
         ).build()
 
+        val stopIntent = Intent(this, PlaybackService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            3,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(artist)
             .setSubText("Bootie Mashup Radio")
             .setContentIntent(mediaSession?.sessionActivity ?: pendingIntent)
-            .setOngoing(true)
+            .setDeleteIntent(stopPendingIntent)
+            .setOngoing(isPlaying)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(playPauseAction)
             .addAction(muteAction)
 
-        if (artworkBitmap != null) {
-            notificationBuilder.setLargeIcon(artworkBitmap)
+        currentArtworkBitmap?.let {
+            notificationBuilder.setLargeIcon(it)
         }
 
         val session = mediaSession
@@ -429,18 +465,28 @@ class PlaybackService : MediaSessionService() {
         }
 
         val notification = notificationBuilder.build()
-
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
+
+        if (isPlaying || startInForegroundRequired) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } catch (e: Exception) {
+                notificationManager.notify(NOTIFICATION_ID, notification)
             }
-        } catch (e: Exception) {
+        } else {
+            // Paused: detach from foreground requirement so user can swipe away, but keep notification visible
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_DETACH)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(false)
+            }
             notificationManager.notify(NOTIFICATION_ID, notification)
         }
-        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun acquireLocks() {
@@ -465,7 +511,7 @@ class PlaybackService : MediaSessionService() {
             if (wifiLock == null) {
                 val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                 val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
                 } else {
                     @Suppress("DEPRECATION")
                     WifiManager.WIFI_MODE_FULL
@@ -509,8 +555,9 @@ class PlaybackService : MediaSessionService() {
         if (player.playWhenReady) {
             player.pause()
         } else {
-            player.stop()
-            player.prepare()
+            if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                player.prepare()
+            }
             player.play()
         }
         updateNotificationLayout()
@@ -536,18 +583,18 @@ class PlaybackService : MediaSessionService() {
             val primaryValid = checkStreamUrlValid(PRIMARY_STREAM_URL)
             val fallbackValid = if (!primaryValid) checkStreamUrlValid(FALLBACK_STREAM_URL) else true
             val chosenUrl = determineSessionStream(primaryValid, fallbackValid)
-            withContext(Dispatchers.Main) {
-                currentStreamUrl = chosenUrl
-                val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
-                val item = MediaItem.Builder()
-                    .setUri(chosenUrl)
-                    .setMediaId("bootie_mashup_stream")
-                    .setMediaMetadata(currentMetadata)
-                    .build()
-                player.setMediaItem(item)
-                player.prepare()
-                if (player.playWhenReady) {
-                    player.play()
+            if (chosenUrl != currentStreamUrl) {
+                withContext(Dispatchers.Main) {
+                    currentStreamUrl = chosenUrl
+                    val item = MediaItem.Builder()
+                        .setUri(chosenUrl)
+                        .setMediaId("bootie_mashup_stream")
+                        .build()
+                    player.setMediaItem(item)
+                    player.prepare()
+                    if (player.playWhenReady) {
+                        player.play()
+                    }
                 }
             }
         }
@@ -564,11 +611,9 @@ class PlaybackService : MediaSessionService() {
                 // Retry connecting to the session's stream from live
                 try {
                     player.stop()
-                    val currentMetadata = currentPolledMetadata ?: player.playlistMetadata
                     val item = MediaItem.Builder()
                         .setUri(currentStreamUrl)
                         .setMediaId("bootie_mashup_stream")
-                        .setMediaMetadata(currentMetadata)
                         .build()
                     player.setMediaItem(item)
                     player.prepare()
@@ -620,7 +665,7 @@ class PlaybackService : MediaSessionService() {
         mediaSessionInstance.setCustomLayout(listOf(playPauseButton, muteButton))
 
         // Also update foreground notification actions
-        startForegroundNotification()
+        updateForegroundNotification(startInForegroundRequired = isPlaying)
     }
 
     private fun fetchInitialMetadataAsync() {
@@ -672,7 +717,8 @@ class PlaybackService : MediaSessionService() {
                 lastNowPlaying = parsed.displayTitle
                 lastNextTrack = parsed.nextTrack
 
-                var artworkBytes: ByteArray? = null
+                var scaledBitmap: Bitmap? = null
+                var scaledJpegBytes: ByteArray? = null
                 try {
                     val artworkRequest = Request.Builder()
                         .url(parsed.artworkUriString)
@@ -680,25 +726,32 @@ class PlaybackService : MediaSessionService() {
                     okHttpClient.newCall(artworkRequest).execute().use { artworkResponse ->
                         val artworkBody = artworkResponse.body
                         if (artworkResponse.isSuccessful && artworkBody != null) {
-                            artworkBytes = artworkBody.bytes()
+                            val rawBytes = artworkBody.bytes()
+                            val processed = MetadataHelper.processArtworkBytes(rawBytes, MetadataHelper.MAX_ARTWORK_DIMENSION)
+                            if (processed != null) {
+                                scaledBitmap = processed.first
+                                scaledJpegBytes = processed.second
+                            } else {
+                                scaledJpegBytes = rawBytes
+                            }
                         }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
 
-                val updatedMetadata = MetadataHelper.buildMediaMetadata(parsed, artworkBytes)
+                val updatedMetadata = MetadataHelper.buildMediaMetadata(parsed, scaledJpegBytes)
                 currentPolledMetadata = updatedMetadata
+                if (scaledBitmap != null) {
+                    currentArtworkBitmap = scaledBitmap
+                }
 
                 withContext(Dispatchers.Main) {
+                    // Updating playlistMetadata automatically merges into player.mediaMetadata
+                    // and triggers onMediaMetadataChanged / onPlaylistMetadataChanged across MediaSession
+                    // and Bluetooth AVRCP without interrupting or restarting live stream playback!
                     player.playlistMetadata = updatedMetadata
-                    player.currentMediaItem?.let { currentItem ->
-                        val updatedItem = currentItem.buildUpon()
-                            .setMediaMetadata(updatedMetadata)
-                            .build()
-                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
-                    }
-                    startForegroundNotification()
+                    updateNotificationLayout()
                 }
             }
         }
@@ -724,9 +777,9 @@ class PlaybackService : MediaSessionService() {
     private inner class CustomCallback : MediaSession.Callback {
         override fun onConnect(
             session: MediaSession,
-            controller: MediaSession.ControllerInfo
+            controllerInfo: MediaSession.ControllerInfo
         ): MediaSession.ConnectionResult {
-            val connectionResult = super.onConnect(session, controller)
+            val connectionResult = super.onConnect(session, controllerInfo)
             val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
                 .add(SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY))
                 .add(SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY))
@@ -737,6 +790,9 @@ class PlaybackService : MediaSessionService() {
                 .add(Player.COMMAND_STOP)
                 .add(Player.COMMAND_SET_VOLUME)
                 .add(Player.COMMAND_GET_VOLUME)
+                .add(Player.COMMAND_GET_METADATA)
+                .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_TIMELINE)
                 .build()
             return MediaSession.ConnectionResult.accept(
                 availableSessionCommands,
@@ -746,7 +802,7 @@ class PlaybackService : MediaSessionService() {
 
         override fun onCustomCommand(
             session: MediaSession,
-            controller: MediaSession.ControllerInfo,
+            controllerInfo: MediaSession.ControllerInfo,
             customCommand: SessionCommand,
             args: Bundle
         ): ListenableFuture<SessionResult> {
@@ -760,7 +816,7 @@ class PlaybackService : MediaSessionService() {
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }
-            return super.onCustomCommand(session, controller, customCommand, args)
+            return super.onCustomCommand(session, controllerInfo, customCommand, args)
         }
     }
 }

@@ -5,12 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.KeyEvent
 import android.view.View
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -19,7 +18,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -27,17 +25,8 @@ import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
 import androidx.mediarouter.media.MediaControlIntent
 import androidx.mediarouter.media.MediaRouteSelector
+import com.bumptech.glide.Glide
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.common.util.concurrent.MoreExecutors
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.Request
-import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -53,11 +42,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaRouteButton: MediaRouteButton
 
     private var doubleBackToExitPressedOnce = false
-    private var uiPollingJob: Job? = null
-    private var hasLoadedArtwork = false
-    private var lastUiNowPlaying: String = ""
-    private var lastUiNextTrack: String = ""
-    private var lastUiArtworkUrl: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +85,6 @@ class MainActivity : AppCompatActivity() {
             btnMute.isFocusable = true
             mediaRouteButton.isFocusable = true
 
-            // Set up clean background coloring or focus change listeners to indicate focus
             val focusChangeListener = View.OnFocusChangeListener { v, hasFocus ->
                 if (hasFocus) {
                     v.animate().scaleX(1.15f).scaleY(1.15f).setDuration(150).start()
@@ -135,8 +118,12 @@ class MainActivity : AppCompatActivity() {
             toggleMute()
         }
 
-        // Immediately load album artwork on app launch
-        loadAlbumArtwork("https://c7.radioboss.fm/w/artwork/205.jpg")
+        // Load initial placeholder artwork via Glide
+        Glide.with(this)
+            .load(MetadataHelper.ARTWORK_BASE_URL)
+            .placeholder(R.mipmap.ic_launcher_round)
+            .error(R.mipmap.ic_launcher_round)
+            .into(ivArtwork)
     }
 
     override fun onStart() {
@@ -151,19 +138,8 @@ class MainActivity : AppCompatActivity() {
         connectToMediaSession()
     }
 
-    override fun onResume() {
-        super.onResume()
-        startUiPolling()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        stopUiPolling()
-    }
-
     override fun onStop() {
         super.onStop()
-        stopUiPolling()
         // Release MediaController connection
         releaseMediaController()
     }
@@ -213,13 +189,13 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Initial UI sync
+        // Initial UI sync from the connected controller
         updatePlayPauseUI(controller.playWhenReady)
         updateMuteUI(controller.volume == 0f)
-        val initialTitle = controller.playlistMetadata.displayTitle?.toString()
-            ?: controller.playlistMetadata.title?.toString()
+        val initialMetadata = controller.playlistMetadata
+        val initialTitle = initialMetadata.displayTitle?.toString() ?: initialMetadata.title?.toString()
         if (!initialTitle.isNullOrBlank() && initialTitle != "Bootie Mashup Radio") {
-            updateTrackMetadataUI(controller.playlistMetadata)
+            updateTrackMetadataUI(initialMetadata)
         }
     }
 
@@ -241,15 +217,6 @@ class MainActivity : AppCompatActivity() {
             }
             controller.play()
         }
-        // Also send custom action to service for complete sync
-        try {
-            controller.sendCustomCommand(
-                androidx.media3.session.SessionCommand("ACTION_TOGGLE_PLAY_PAUSE", Bundle.EMPTY),
-                Bundle.EMPTY
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 
     private fun toggleMute() {
@@ -261,15 +228,6 @@ class MainActivity : AppCompatActivity() {
         } else {
             controller.volume = 0f
             updateMuteUI(true)
-        }
-        // Also trigger service custom action for complete sync
-        try {
-            controller.sendCustomCommand(
-                androidx.media3.session.SessionCommand("ACTION_TOGGLE_MUTE", Bundle.EMPTY),
-                Bundle.EMPTY
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -311,7 +269,7 @@ class MainActivity : AppCompatActivity() {
             tvTrackTitle.text = displayText
         }
 
-        // Update Coming Next Track Info: fallback to 'Bootie Mashup Radio' if empty
+        // Update Coming Next Track Info
         val nextTrack = activeMetadata.extras?.getString("next_track") ?: ""
         tvNextTrackLabel.visibility = View.VISIBLE
         tvNextTrack.visibility = View.VISIBLE
@@ -321,133 +279,28 @@ class MainActivity : AppCompatActivity() {
             tvNextTrack.text = "Bootie Mashup Radio"
         }
 
-        // Update Album Artwork smoothly using activeMetadata artworkData or fetching via okHttpClient
+        // Update Album Artwork safely: use artworkData if present, or load via Glide
         val artworkData = activeMetadata.artworkData
         if (artworkData != null && artworkData.isNotEmpty()) {
-            val bitmap = android.graphics.BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
-            if (bitmap != null) {
-                ivArtwork.setImageBitmap(bitmap)
-                hasLoadedArtwork = true
-                return
-            }
-        }
-
-        val artworkUri = activeMetadata.artworkUri
-        if (artworkUri != null) {
-            loadAlbumArtwork(artworkUri.toString())
-        }
-    }
-
-    private fun loadAlbumArtwork(baseUrl: String) {
-        lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val cacheBustingUrl = if (baseUrl.contains("?")) {
-                    "$baseUrl&_=" + System.currentTimeMillis()
-                } else {
-                    "$baseUrl?_=" + System.currentTimeMillis()
-                }
-
-                val request = Request.Builder()
-                    .url(cacheBustingUrl)
-                    .build()
-
-                PlaybackService.okHttpClient.newCall(request).execute().use { response ->
-                    val body = response.body
-                    if (response.isSuccessful && body != null) {
-                        val bytes = body.bytes()
-                        if (bytes.isNotEmpty()) {
-                            val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            if (bitmap != null) {
-                                withContext(Dispatchers.Main) {
-                                    ivArtwork.setImageBitmap(bitmap)
-                                    hasLoadedArtwork = true
-                                }
-                            }
-                        }
-                    }
+                val bitmap = BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
+                if (bitmap != null) {
+                    ivArtwork.setImageBitmap(bitmap)
+                    return
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
-    }
 
-    private fun startUiPolling() {
-        uiPollingJob?.cancel()
-        uiPollingJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                try {
-                    val request = Request.Builder()
-                        .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
-                        .build()
-
-                    PlaybackService.okHttpClient.newCall(request).execute().use { response ->
-                        val body = response.body
-                        if (response.isSuccessful && body != null) {
-                            val jsonStr = body.string()
-                            val json = JSONObject(jsonStr)
-                            val nowPlaying = json.optString("nowplaying", "").trim()
-                            var artist = json.optString("currenttrack_artist", "").trim()
-                            var title = json.optString("currenttrack_title", "").trim()
-                            val nextTrack = json.optString("nexttrack", "").trim()
-
-                            val isDefaultPlaceholder = tvTrackTitle.text.toString().trim() == "Bootie Mashup Radio"
-                            val nowPlayingChanged = (nowPlaying != lastUiNowPlaying) || isDefaultPlaceholder
-
-                            if (!nowPlayingChanged && nextTrack == lastUiNextTrack) {
-                                return@use
-                            }
-
-                            if (nowPlayingChanged && lastUiNowPlaying.isNotEmpty()) {
-                                // Wait 1 second after now playing details update before reloading artwork
-                                delay(1000)
-                            }
-
-                            lastUiNowPlaying = nowPlaying
-                            lastUiNextTrack = nextTrack
-
-                            val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-
-                            if (artist.isBlank() || title.isBlank()) {
-                                if (nowPlaying.contains(" - ")) {
-                                    val parts = nowPlaying.split(" - ", limit = 2)
-                                    if (artist.isBlank()) artist = parts[0].trim()
-                                    if (title.isBlank()) title = parts[1].trim()
-                                } else {
-                                    if (title.isBlank()) title = nowPlaying
-                                }
-                            }
-
-                            val displayText = if (nowPlaying.isNotBlank()) nowPlaying else if (title.isNotBlank() && artist.isNotBlank()) "$artist - $title" else title
-
-                            withContext(Dispatchers.Main) {
-                                if (displayText.isNotEmpty()) {
-                                    tvTrackTitle.text = displayText
-                                }
-
-                                tvNextTrackLabel.visibility = View.VISIBLE
-                                tvNextTrack.visibility = View.VISIBLE
-                                if (nextTrack.isNotEmpty()) {
-                                    tvNextTrack.text = nextTrack
-                                } else {
-                                    tvNextTrack.text = "Bootie Mashup Radio"
-                                }
-
-                                loadAlbumArtwork(artworkBaseUrl)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                delay(5000)
-            }
+        val artworkUri = activeMetadata.artworkUri
+        if (artworkUri != null) {
+            Glide.with(this)
+                .load(artworkUri)
+                .placeholder(ivArtwork.drawable)
+                .error(R.mipmap.ic_launcher_round)
+                .into(ivArtwork)
         }
-    }
-
-    private fun stopUiPolling() {
-        uiPollingJob?.cancel()
-        uiPollingJob = null
     }
 
     private fun checkBatteryOptimization() {
@@ -468,8 +321,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun isAndroidTV(): Boolean {
         val pm = packageManager
-        return pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
-               pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION)
+        return pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
     }
 
     private fun killAudioAndExit() {
@@ -481,7 +333,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Stop the background service
-        val stopServiceIntent = Intent(this, PlaybackService::class.java)
+        val stopServiceIntent = Intent(this, PlaybackService::class.java).apply {
+            action = PlaybackService.ACTION_STOP
+        }
+        startService(stopServiceIntent)
         stopService(stopServiceIntent)
 
         // Close app and kill process
