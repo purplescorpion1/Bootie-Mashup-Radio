@@ -132,4 +132,70 @@ class ArtworkTest {
         assertEquals("DJs From Mars", trackArtist)
         assertEquals("Best Of 2024", trackTitle)
     }
+
+    @Test
+    fun testMetadataHelperParseFullJson() {
+        val jsonStr = """
+            {
+                "nowplaying": "Victor Serna - Ir-roar-placeable",
+                "currenttrack_artist": "Victor Serna",
+                "currenttrack_title": "Ir-roar-placeable",
+                "nexttrack": "DJs From Mars - Mashup Next"
+            }
+        """.trimIndent()
+
+        val result = MetadataHelper.parseNowPlayingJson(jsonStr)
+        assertEquals("Ir-roar-placeable", result.title)
+        assertEquals("Victor Serna", result.artist)
+        assertEquals("Victor Serna - Ir-roar-placeable", result.displayTitle)
+        assertEquals("DJs From Mars - Mashup Next", result.nextTrack)
+        assertTrue(result.artworkUriString.startsWith(MetadataHelper.ARTWORK_BASE_URL))
+
+        val mediaMetadata = MetadataHelper.buildMediaMetadata(result, byteArrayOf(1, 2, 3))
+        assertEquals("Ir-roar-placeable", mediaMetadata.title?.toString())
+        assertEquals("Victor Serna", mediaMetadata.artist?.toString())
+        assertEquals("Bootie Mashup Radio", mediaMetadata.albumTitle?.toString())
+        assertEquals(MediaMetadata.MEDIA_TYPE_MUSIC, mediaMetadata.mediaType)
+        assertNotNull(mediaMetadata.artworkData)
+        assertEquals(3, mediaMetadata.artworkData?.size)
+    }
+
+    @Test
+    fun testMetadataHelperFallbackParsing() {
+        val jsonStr = """
+            {
+                "nowplaying": "Lobsterdust - Stayin' Alive In The Wall",
+                "currenttrack_artist": "",
+                "currenttrack_title": "",
+                "nexttrack": ""
+            }
+        """.trimIndent()
+
+        val result = MetadataHelper.parseNowPlayingJson(jsonStr)
+        assertEquals("Stayin' Alive In The Wall", result.title)
+        assertEquals("Lobsterdust", result.artist)
+        assertEquals("Lobsterdust - Stayin' Alive In The Wall", result.displayTitle)
+        assertEquals("", result.nextTrack)
+
+        val mediaMetadata = MetadataHelper.buildMediaMetadata(result)
+        assertEquals("Stayin' Alive In The Wall", mediaMetadata.title?.toString())
+        assertEquals("Lobsterdust", mediaMetadata.artist?.toString())
+    }
+
+    @Test
+    fun testMetadataHelperEmptyFallback() {
+        val jsonStr = """
+            {
+                "nowplaying": "",
+                "currenttrack_artist": "",
+                "currenttrack_title": "",
+                "nexttrack": ""
+            }
+        """.trimIndent()
+
+        val result = MetadataHelper.parseNowPlayingJson(jsonStr)
+        assertEquals("Bootie Mashup Radio", result.title)
+        assertEquals("Bootie Mashup Radio", result.artist)
+        assertEquals("Bootie Mashup Radio", result.displayTitle)
+    }
 }

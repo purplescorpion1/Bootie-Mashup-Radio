@@ -83,7 +83,7 @@ class PlaybackService : MediaSessionService() {
     private fun notifySessionMetadataChanged(metadata: MediaMetadata) {
         Handler(Looper.getMainLooper()).post {
             val timeline = sessionPlayer.currentTimeline
-            val activeItem = sessionPlayer.currentMediaItem
+            val activeItem = sessionPlayer.currentMediaItem ?: sessionPlayer.getMediaItemAt(0)
             for (listener in sessionListeners) {
                 try {
                     listener.onTimelineChanged(timeline, Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
@@ -94,6 +94,60 @@ class PlaybackService : MediaSessionService() {
                     e.printStackTrace()
                 }
             }
+            updateMediaSessionCompatMetadata(metadata)
+        }
+    }
+
+    private fun updateMediaSessionCompatMetadata(metadata: MediaMetadata) {
+        try {
+            val sessionInstance = mediaSession ?: return
+            var artworkBitmap: Bitmap? = null
+            val artworkBytes = metadata.artworkData
+            if (artworkBytes != null && artworkBytes.isNotEmpty()) {
+                artworkBitmap = BitmapFactory.decodeByteArray(artworkBytes, 0, artworkBytes.size)
+            }
+
+            // Access sessionLegacyStub from MediaSessionImpl via reflection
+            val implField = sessionInstance.javaClass.getDeclaredField("impl").apply {
+                isAccessible = true
+            }
+            val sessionImpl = implField.get(sessionInstance) ?: return
+            val stubField = sessionImpl.javaClass.getDeclaredField("sessionLegacyStub").apply {
+                isAccessible = true
+            }
+            val sessionLegacyStub = stubField.get(sessionImpl) ?: return
+            val sessionCompatField = sessionLegacyStub.javaClass.getDeclaredField("sessionCompat").apply {
+                isAccessible = true
+            }
+            val sessionCompat = sessionCompatField.get(sessionLegacyStub) as? androidx.media3.session.legacy.MediaSessionCompat
+
+            if (sessionCompat != null) {
+                val mediaId = player.currentMediaItem?.mediaId ?: "bootie_mashup_stream"
+                val mediaUri = Uri.parse(currentStreamUrl)
+                val durationMs = -1L
+                val legacyConversionsClass = Class.forName("androidx.media3.session.LegacyConversions")
+                val convertMethod = legacyConversionsClass.getDeclaredMethod(
+                    "convertToMediaMetadataCompat",
+                    MediaMetadata::class.java,
+                    String::class.java,
+                    Uri::class.java,
+                    Long::class.javaPrimitiveType,
+                    Bitmap::class.java
+                ).apply {
+                    isAccessible = true
+                }
+                val compatMetadata = convertMethod.invoke(
+                    null,
+                    metadata,
+                    mediaId,
+                    mediaUri,
+                    durationMs,
+                    artworkBitmap
+                ) as? androidx.media3.session.legacy.MediaMetadataCompat
+                sessionCompat.setMetadata(compatMetadata)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -272,6 +326,13 @@ class PlaybackService : MediaSessionService() {
 
         // Create ForwardingPlayer so MediaSession delegates getCurrentTimeline, getCurrentMediaItem, getMediaMetadata, and getPlaylistMetadata to currentPolledMetadata
         sessionPlayer = object : ForwardingPlayer(player) {
+            override fun getAvailableCommands(): Player.Commands {
+                return super.getAvailableCommands().buildUpon()
+                    .add(Player.COMMAND_GET_METADATA)
+                    .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                    .add(Player.COMMAND_GET_TIMELINE)
+                    .build()
+            }
             override fun addListener(listener: Player.Listener) {
                 sessionListeners.add(listener)
                 super.addListener(listener)
@@ -404,6 +465,9 @@ class PlaybackService : MediaSessionService() {
         // Start background metadata and artwork polling
         startMetadataPolling()
 
+        // Perform immediate one-shot fetch for initial metadata & artwork on first open
+        fetchInitialMetadataAsync()
+
         // Initialize notification button layout
         updateNotificationLayout()
     }
@@ -526,11 +590,19 @@ class PlaybackService : MediaSessionService() {
 
         val notification = notificationBuilder.build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // If already started as foreground, update via notificationManager
+            notificationManager.notify(NOTIFICATION_ID, notification)
         }
+        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun acquireLocks() {
@@ -713,12 +785,22 @@ class PlaybackService : MediaSessionService() {
         startForegroundNotification()
     }
 
+    private fun fetchInitialMetadataAsync() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                fetchAndUpdateMetadata(isInitial = true)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private fun startMetadataPolling() {
         pollingJob?.cancel()
         pollingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 try {
-                    fetchAndUpdateMetadata()
+                    fetchAndUpdateMetadata(isInitial = false)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -727,58 +809,35 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private suspend fun fetchAndUpdateMetadata() {
+    private suspend fun fetchAndUpdateMetadata(isInitial: Boolean = false) {
         val request = Request.Builder()
-            .url("https://c7.radioboss.fm/w/nowplayinginfo?u=205")
+            .url(MetadataHelper.NOW_PLAYING_URL)
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
             val body = response.body
             if (response.isSuccessful && body != null) {
                 val jsonStr = body.string()
-                val json = JSONObject(jsonStr)
-                val nowPlaying = json.optString("nowplaying", "").trim()
-                var artist = json.optString("currenttrack_artist", "").trim()
-                var title = json.optString("currenttrack_title", "").trim()
-                val nextTrack = json.optString("nexttrack", "").trim()
+                val parsed = MetadataHelper.parseNowPlayingJson(jsonStr)
 
-                val nowPlayingChanged = (nowPlaying != lastNowPlaying) || (currentPolledMetadata == null)
+                val nowPlayingChanged = (parsed.displayTitle != lastNowPlaying) || (currentPolledMetadata == null)
 
-                if (!nowPlayingChanged && nextTrack == lastNextTrack) {
+                if (!nowPlayingChanged && parsed.nextTrack == lastNextTrack && !isInitial) {
                     return@use
                 }
 
-                if (nowPlayingChanged && lastNowPlaying.isNotEmpty()) {
+                if (nowPlayingChanged && lastNowPlaying.isNotEmpty() && !isInitial) {
                     // Wait 1 second after now playing details update before reloading artwork
                     delay(1000)
                 }
 
-                lastNowPlaying = nowPlaying
-                lastNextTrack = nextTrack
-
-                val artworkBaseUrl = "https://c7.radioboss.fm/w/artwork/205.jpg"
-
-                if (artist.isBlank() || title.isBlank()) {
-                    if (nowPlaying.contains(" - ")) {
-                        val parts = nowPlaying.split(" - ", limit = 2)
-                        if (artist.isBlank()) artist = parts[0].trim()
-                        if (title.isBlank()) title = parts[1].trim()
-                    } else {
-                        if (title.isBlank()) title = nowPlaying
-                    }
-                }
-
-                val trackTitle = if (title.isNotBlank()) title else if (nowPlaying.isNotBlank()) nowPlaying else "Bootie Mashup Radio"
-                val trackArtist = if (artist.isNotBlank()) artist else "Bootie Mashup Radio"
-                val displayTitleStr = if (nowPlaying.isNotBlank()) nowPlaying else if (artist.isNotBlank() && title.isNotBlank()) "$artist - $title" else trackTitle
-
-                val timestampedArtworkUrl = "$artworkBaseUrl?_=" + System.currentTimeMillis()
-                val artworkUri = Uri.parse(timestampedArtworkUrl)
+                lastNowPlaying = parsed.displayTitle
+                lastNextTrack = parsed.nextTrack
 
                 var artworkBytes: ByteArray? = null
                 try {
                     val artworkRequest = Request.Builder()
-                        .url(timestampedArtworkUrl)
+                        .url(parsed.artworkUriString)
                         .build()
                     okHttpClient.newCall(artworkRequest).execute().use { artworkResponse ->
                         val artworkBody = artworkResponse.body
@@ -790,29 +849,18 @@ class PlaybackService : MediaSessionService() {
                     e.printStackTrace()
                 }
 
-                val extras = Bundle().apply {
-                    putString("next_track", nextTrack)
-                }
-
-                val metadataBuilder = MediaMetadata.Builder()
-                    .setTitle(trackTitle)
-                    .setArtist(trackArtist)
-                    .setAlbumTitle("Bootie Mashup Radio")
-                    .setAlbumArtist("Bootie Mashup Radio")
-                    .setDisplayTitle(displayTitleStr)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                    .setArtworkUri(artworkUri)
-                    .setExtras(extras)
-
-                if (artworkBytes != null && artworkBytes!!.isNotEmpty()) {
-                    metadataBuilder.setArtworkData(artworkBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-                }
-
-                val updatedMetadata = metadataBuilder.build()
+                val updatedMetadata = MetadataHelper.buildMediaMetadata(parsed, artworkBytes)
                 currentPolledMetadata = updatedMetadata
 
                 withContext(Dispatchers.Main) {
                     player.playlistMetadata = updatedMetadata
+                    val currentItem = player.currentMediaItem
+                    if (currentItem != null) {
+                        val updatedItem = currentItem.buildUpon()
+                            .setMediaMetadata(updatedMetadata)
+                            .build()
+                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
+                    }
                     notifySessionMetadataChanged(updatedMetadata)
                     startForegroundNotification()
                 }
