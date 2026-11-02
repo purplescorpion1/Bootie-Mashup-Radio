@@ -185,7 +185,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onMediaMetadataChanged(metadata: MediaMetadata) {
-                updateTrackMetadataUI(controller.playlistMetadata)
+                updateTrackMetadataUI(if (!metadata.title.isNullOrBlank()) metadata else controller.playlistMetadata)
             }
         })
 

@@ -35,6 +35,8 @@ import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import androidx.media3.session.legacy.MediaMetadataCompat
+import androidx.media3.session.legacy.MediaSessionCompat
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -231,33 +233,29 @@ class PlaybackService : MediaSessionService() {
             .build()
         currentPolledMetadata = initialMetadata
 
-        // Initial MediaItem with EMPTY metadata so player.playlistMetadata drives player.mediaMetadata
+        // Initial MediaItem with initial metadata so player.mediaMetadata is populated immediately
         val initialMediaItem = MediaItem.Builder()
             .setUri(currentStreamUrl)
             .setMediaId("bootie_mashup_stream")
+            .setMediaMetadata(initialMetadata)
             .build()
         player.setMediaItem(initialMediaItem)
         player.playlistMetadata = initialMetadata
 
-        // Create PendingIntent to launch MainActivity when notification is tapped
-        val intent = Intent(applicationContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            applicationContext,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        // Create PendingIntent supporting both Android TV Leanback launcher and standard mobile launcher
+        val sessionActivityIntent = createLaunchPendingIntent()
 
         // Native Media3 Setup directly using ExoPlayer instance
         mediaSession = MediaSession.Builder(this, player)
-            .setSessionActivity(pendingIntent)
+            .setSessionActivity(sessionActivityIntent)
             .setBitmapLoader(okHttpBitmapLoader)
             .setCallback(CustomCallback())
             .build()
+
+        // Sync legacy MediaSessionCompat sessionActivity and initial metadata
+        // This ensures the Android TV "Open" button works and lock screen / TV card show station info from startup
+        getSessionCompat()?.setSessionActivity(sessionActivityIntent)
+        updateLegacySessionMetadata(initialMetadata, null)
 
         // Keep notification visible even when player is buffering/idle
         setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_ALWAYS)
@@ -358,6 +356,77 @@ class PlaybackService : MediaSessionService() {
         stopSelf()
     }
 
+    private fun createLaunchPendingIntent(): PendingIntent {
+        val pm = applicationContext.packageManager
+        val launchIntent = pm.getLeanbackLaunchIntentForPackage(packageName)
+            ?: pm.getLaunchIntentForPackage(packageName)
+            ?: Intent(applicationContext, MainActivity::class.java)
+        launchIntent.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            applicationContext,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    private fun getSessionCompat(): MediaSessionCompat? {
+        return try {
+            val session = mediaSession ?: return null
+            val implField = MediaSession::class.java.getDeclaredField("impl").apply { isAccessible = true }
+            val impl = implField.get(session) ?: return null
+            val getLegacyStubMethod = impl.javaClass.getDeclaredMethod("getMediaSessionLegacyStub").apply { isAccessible = true }
+            val legacyStub = getLegacyStubMethod.invoke(impl) ?: return null
+            val getSessionCompatMethod = legacyStub.javaClass.getMethod("getSessionCompat")
+            getSessionCompatMethod.invoke(legacyStub) as? MediaSessionCompat
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun updateLegacySessionMetadata(metadata: MediaMetadata, bitmap: Bitmap? = null) {
+        try {
+            val sessionCompat = getSessionCompat() ?: return
+            val title = metadata.title?.toString()
+                ?: metadata.displayTitle?.toString()
+                ?: "Bootie Mashup Radio"
+            val artist = metadata.artist?.toString() ?: "Live Stream"
+            val album = metadata.albumTitle?.toString() ?: "Bootie Mashup Radio"
+            val displayTitle = metadata.displayTitle?.toString() ?: title
+
+            val builder = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "bootie_mashup_stream")
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, album)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, artist)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, album)
+
+            metadata.artworkUri?.let { uri ->
+                val uriStr = uri.toString()
+                builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, uriStr)
+                builder.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, uriStr)
+                builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, uriStr)
+            }
+
+            val artwork = bitmap ?: currentArtworkBitmap
+            if (artwork != null) {
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork)
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artwork)
+            }
+
+            sessionCompat.setMetadata(builder.build())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -376,17 +445,7 @@ class PlaybackService : MediaSessionService() {
     private fun updateForegroundNotification(startInForegroundRequired: Boolean = false) {
         createNotificationChannel()
 
-        val intent = Intent(applicationContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            applicationContext,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        val sessionActivityIntent = mediaSession?.sessionActivity ?: createLaunchPendingIntent()
 
         val metadata = currentPolledMetadata ?: player.playlistMetadata
         val title = metadata.title?.toString()
@@ -444,7 +503,7 @@ class PlaybackService : MediaSessionService() {
             .setContentTitle(title)
             .setContentText(artist)
             .setSubText("Bootie Mashup Radio")
-            .setContentIntent(mediaSession?.sessionActivity ?: pendingIntent)
+            .setContentIntent(sessionActivityIntent)
             .setDeleteIntent(stopPendingIntent)
             .setOngoing(isPlaying)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -586,9 +645,11 @@ class PlaybackService : MediaSessionService() {
             if (chosenUrl != currentStreamUrl) {
                 withContext(Dispatchers.Main) {
                     currentStreamUrl = chosenUrl
+                    val activeMetadata = currentPolledMetadata ?: player.playlistMetadata
                     val item = MediaItem.Builder()
                         .setUri(chosenUrl)
                         .setMediaId("bootie_mashup_stream")
+                        .setMediaMetadata(activeMetadata)
                         .build()
                     player.setMediaItem(item)
                     player.prepare()
@@ -611,9 +672,11 @@ class PlaybackService : MediaSessionService() {
                 // Retry connecting to the session's stream from live
                 try {
                     player.stop()
+                    val activeMetadata = currentPolledMetadata ?: player.playlistMetadata
                     val item = MediaItem.Builder()
                         .setUri(currentStreamUrl)
                         .setMediaId("bootie_mashup_stream")
+                        .setMediaMetadata(activeMetadata)
                         .build()
                     player.setMediaItem(item)
                     player.prepare()
@@ -747,10 +810,18 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 withContext(Dispatchers.Main) {
-                    // Updating playlistMetadata automatically merges into player.mediaMetadata
-                    // and triggers onMediaMetadataChanged / onPlaylistMetadataChanged across MediaSession
-                    // and Bluetooth AVRCP without interrupting or restarting live stream playback!
+                    // Updating playlistMetadata, currentMediaItem, and legacy sessionCompat ensures
+                    // that Mobile Lock Screen, Android TV Leanback launcher card, and Bluetooth
+                    // AVRCP (smartwatch/car) immediately show the correct track title, artist,
+                    // album, and album artwork without interrupting live stream playback!
                     player.playlistMetadata = updatedMetadata
+                    player.currentMediaItem?.let { currentItem ->
+                        val updatedItem = currentItem.buildUpon()
+                            .setMediaMetadata(updatedMetadata)
+                            .build()
+                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
+                    }
+                    updateLegacySessionMetadata(updatedMetadata, scaledBitmap)
                     updateNotificationLayout()
                 }
             }
