@@ -1,4 +1,8 @@
+@file:SuppressLint("RestrictedApi")
+
 package com.bootiemashup.radio
+
+import android.annotation.SuppressLint
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,13 +19,16 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
@@ -35,8 +42,10 @@ import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import androidx.media3.session.legacy.MediaDescriptionCompat
 import androidx.media3.session.legacy.MediaMetadataCompat
 import androidx.media3.session.legacy.MediaSessionCompat
+import androidx.media3.session.legacy.PlaybackStateCompat
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -46,6 +55,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,6 +78,7 @@ class PlaybackService : MediaSessionService() {
     private var currentArtworkBitmap: Bitmap? = null
     private var lastNowPlaying: String = ""
     private var lastNextTrack: String = ""
+    private var trackSequenceNumber: Long = 0L
 
     private var currentStreamUrl: String = PRIMARY_STREAM_URL
     private var retryJob: Job? = null
@@ -95,9 +106,8 @@ class PlaybackService : MediaSessionService() {
                 try {
                     val request = Request.Builder().url(uri.toString()).build()
                     okHttpClient.newCall(request).execute().use { response ->
-                        val body = response.body
-                        if (response.isSuccessful && body != null) {
-                            val bytes = body.bytes()
+                        if (response.isSuccessful) {
+                            val bytes = response.body.bytes()
                             val processed = MetadataHelper.processArtworkBytes(bytes, MetadataHelper.MAX_ARTWORK_DIMENSION)
                             val bitmap = processed?.first ?: BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             if (bitmap != null) {
@@ -153,15 +163,21 @@ class PlaybackService : MediaSessionService() {
                 okHttpClient.newCall(request).execute().use { response ->
                     response.isSuccessful
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 false
             }
         }
 
+        const val CHANNEL_ID = "bootie_radio_playback_channel"
+        const val NOTIFICATION_ID = 1001
+
         val okHttpClient: OkHttpClient by lazy {
             val trustAllCerts = arrayOf<TrustManager>(
+                @SuppressLint("CustomX509TrustManager")
                 object : X509TrustManager {
+                    @SuppressLint("TrustAllX509TrustManager")
                     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    @SuppressLint("TrustAllX509TrustManager")
                     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
                     override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
                 }
@@ -188,9 +204,6 @@ class PlaybackService : MediaSessionService() {
                 .build()
         }
     }
-
-    private val CHANNEL_ID = "bootie_radio_playback_channel"
-    private val NOTIFICATION_ID = 1001
 
     override fun onCreate() {
         super.onCreate()
@@ -229,7 +242,7 @@ class PlaybackService : MediaSessionService() {
             .setAlbumArtist("Bootie Mashup Radio")
             .setDisplayTitle("Bootie Mashup Radio")
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-            .setArtworkUri(Uri.parse(MetadataHelper.ARTWORK_BASE_URL))
+            .setArtworkUri(MetadataHelper.ARTWORK_BASE_URL.toUri())
             .build()
         currentPolledMetadata = initialMetadata
 
@@ -284,12 +297,14 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
                 updateNotificationLayout()
+                syncLegacyPlaybackState(playWhenReady)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 super.onPlaybackStateChanged(playbackState)
                 if (playbackState == Player.STATE_READY) {
                     stopRetryLoop()
+                    syncLegacyPlaybackState(player.playWhenReady)
                 } else if (playbackState == Player.STATE_ENDED) {
                     if (player.playWhenReady) {
                         startRetryLoop()
@@ -297,7 +312,7 @@ class PlaybackService : MediaSessionService() {
                 }
             }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            override fun onPlayerError(error: PlaybackException) {
                 super.onPlayerError(error)
                 if (player.playWhenReady) {
                     startRetryLoop()
@@ -387,7 +402,11 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun updateLegacySessionMetadata(metadata: MediaMetadata, bitmap: Bitmap? = null) {
+    private fun updateLegacySessionMetadata(
+        metadata: MediaMetadata,
+        bitmap: Bitmap? = null,
+        isTrackChange: Boolean = false
+    ) {
         try {
             val sessionCompat = getSessionCompat() ?: return
             val title = metadata.title?.toString()
@@ -397,8 +416,10 @@ class PlaybackService : MediaSessionService() {
             val album = metadata.albumTitle?.toString() ?: "Bootie Mashup Radio"
             val displayTitle = metadata.displayTitle?.toString() ?: title
 
+            val trackId = "bootie_track_$trackSequenceNumber"
+
             val builder = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "bootie_mashup_stream")
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, trackId)
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
                 .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
                 .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album)
@@ -406,6 +427,9 @@ class PlaybackService : MediaSessionService() {
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, artist)
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, album)
+                .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, trackSequenceNumber)
+                .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, 999L)
+                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, 180000L) // 3-minute spoof duration for car stereos expecting track duration
 
             metadata.artworkUri?.let { uri ->
                 val uriStr = uri.toString()
@@ -422,24 +446,129 @@ class PlaybackService : MediaSessionService() {
             }
 
             sessionCompat.setMetadata(builder.build())
+
+            // Update queue with new track info so Android AVRCP target recognizes active track
+            val description = MediaDescriptionCompat.Builder()
+                .setMediaId(trackId)
+                .setTitle(displayTitle)
+                .setSubtitle(artist)
+                .setDescription(album)
+                .apply {
+                    if (artwork != null) setIconBitmap(artwork)
+                    metadata.artworkUri?.let { setIconUri(it) }
+                }
+                .build()
+            val queueItem = MediaSessionCompat.QueueItem(description, trackSequenceNumber)
+            sessionCompat.setQueue(listOf(queueItem))
+            sessionCompat.setQueueTitle("Bootie Mashup Radio")
+
+            // Spoof track transition in PlaybackStateCompat without interrupting ExoPlayer audio playback
+            if (player.playWhenReady) {
+                if (isTrackChange) {
+                    // Momentarily signal a track transition state (STATE_SKIPPING_TO_NEXT) to wake up
+                    // car head units that only refresh upon seeing a playback state event
+                    val transitionState = PlaybackStateCompat.Builder()
+                        .setState(PlaybackStateCompat.STATE_SKIPPING_TO_NEXT, 0L, 1.0f)
+                        .setActiveQueueItemId(trackSequenceNumber)
+                        .build()
+                    sessionCompat.setPlaybackState(transitionState)
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        try {
+                            val session = getSessionCompat() ?: return@postDelayed
+                            val playingState = PlaybackStateCompat.Builder()
+                                .setState(
+                                    PlaybackStateCompat.STATE_PLAYING,
+                                    0L,
+                                    1.0f,
+                                    SystemClock.elapsedRealtime()
+                                )
+                                .setActions(
+                                    PlaybackStateCompat.ACTION_PLAY or
+                                    PlaybackStateCompat.ACTION_PAUSE or
+                                    PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                                    PlaybackStateCompat.ACTION_STOP
+                                )
+                                .setActiveQueueItemId(trackSequenceNumber)
+                                .build()
+                            session.setPlaybackState(playingState)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }, 100)
+                } else {
+                    val playingState = PlaybackStateCompat.Builder()
+                        .setState(
+                            PlaybackStateCompat.STATE_PLAYING,
+                            0L,
+                            1.0f,
+                            SystemClock.elapsedRealtime()
+                        )
+                        .setActions(
+                            PlaybackStateCompat.ACTION_PLAY or
+                            PlaybackStateCompat.ACTION_PAUSE or
+                            PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                            PlaybackStateCompat.ACTION_STOP
+                        )
+                        .setActiveQueueItemId(trackSequenceNumber)
+                        .build()
+                    sessionCompat.setPlaybackState(playingState)
+                }
+            } else {
+                val pausedState = PlaybackStateCompat.Builder()
+                    .setState(
+                        PlaybackStateCompat.STATE_PAUSED,
+                        0L,
+                        0.0f,
+                        SystemClock.elapsedRealtime()
+                    )
+                    .setActions(
+                        PlaybackStateCompat.ACTION_PLAY or
+                        PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                        PlaybackStateCompat.ACTION_STOP
+                    )
+                    .setActiveQueueItemId(trackSequenceNumber)
+                    .build()
+                sessionCompat.setPlaybackState(pausedState)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun syncLegacyPlaybackState(isPlaying: Boolean) {
+        try {
+            val sessionCompat = getSessionCompat() ?: return
+            val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+            val speed = if (isPlaying) 1.0f else 0.0f
+            val playbackState = PlaybackStateCompat.Builder()
+                .setState(state, 0L, speed, SystemClock.elapsedRealtime())
+                .setActions(
+                    PlaybackStateCompat.ACTION_PLAY or
+                    PlaybackStateCompat.ACTION_PAUSE or
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                    PlaybackStateCompat.ACTION_STOP
+                )
+                .setActiveQueueItemId(trackSequenceNumber)
+                .build()
+            sessionCompat.setPlaybackState(playbackState)
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Bootie Radio Playback",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Background audio streaming for Bootie Mashup Radio"
-                setShowBadge(false)
-            }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Bootie Radio Playback",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Background audio streaming for Bootie Mashup Radio"
+            setShowBadge(false)
         }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(channel)
     }
 
     private fun updateForegroundNotification(startInForegroundRequired: Boolean = false) {
@@ -533,17 +662,12 @@ class PlaybackService : MediaSessionService() {
                 } else {
                     startForeground(NOTIFICATION_ID, notification)
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
         } else {
             // Paused: detach from foreground requirement so user can swipe away, but keep notification visible
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_DETACH)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(false)
-            }
+            stopForeground(STOP_FOREGROUND_DETACH)
             notificationManager.notify(NOTIFICATION_ID, notification)
         }
     }
@@ -629,10 +753,12 @@ class PlaybackService : MediaSessionService() {
         updateNotificationLayout()
     }
 
+    @Suppress("unused")
     fun isAudioMuted(): Boolean {
         return isMuted
     }
 
+    @Suppress("unused")
     fun getSessionStreamUrl(): String {
         return currentStreamUrl
     }
@@ -667,7 +793,7 @@ class PlaybackService : MediaSessionService() {
         retryJob?.cancel()
         retryJob = CoroutineScope(Dispatchers.Main).launch {
             while (isActive && isRetrying && player.playWhenReady) {
-                delay(5000)
+                delay(5.seconds)
                 if (!isRetrying || !player.playWhenReady) break
                 // Retry connecting to the session's stream from live
                 try {
@@ -694,6 +820,7 @@ class PlaybackService : MediaSessionService() {
         retryJob = null
     }
 
+    @Suppress("unused")
     fun isRetryingStream(): Boolean {
         return isRetrying
     }
@@ -744,13 +871,14 @@ class PlaybackService : MediaSessionService() {
     private fun startMetadataPolling() {
         pollingJob?.cancel()
         pollingJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(5.seconds) // Wait 5 seconds so initial fetch completes cleanly without competition
             while (isActive) {
                 try {
                     fetchAndUpdateMetadata(isInitial = false)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                delay(5000) // Poll every 5 seconds
+                delay(5.seconds) // Poll every 5 seconds
             }
         }
     }
@@ -761,9 +889,8 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         okHttpClient.newCall(request).execute().use { response ->
-            val body = response.body
-            if (response.isSuccessful && body != null) {
-                val jsonStr = body.string()
+            if (response.isSuccessful) {
+                val jsonStr = response.body.string()
                 val parsed = MetadataHelper.parseNowPlayingJson(jsonStr)
 
                 val nowPlayingChanged = (parsed.displayTitle != lastNowPlaying) || (currentPolledMetadata == null)
@@ -774,7 +901,12 @@ class PlaybackService : MediaSessionService() {
 
                 if (nowPlayingChanged && lastNowPlaying.isNotEmpty() && !isInitial) {
                     // Wait 1 second after now playing details update before reloading artwork
-                    delay(1000)
+                    delay(1.seconds)
+                }
+
+                val isRealTrackChange = nowPlayingChanged && (lastNowPlaying.isNotEmpty() || parsed.displayTitle != "Bootie Mashup Radio")
+                if (isRealTrackChange) {
+                    trackSequenceNumber++
                 }
 
                 lastNowPlaying = parsed.displayTitle
@@ -787,9 +919,8 @@ class PlaybackService : MediaSessionService() {
                         .url(parsed.artworkUriString)
                         .build()
                     okHttpClient.newCall(artworkRequest).execute().use { artworkResponse ->
-                        val artworkBody = artworkResponse.body
-                        if (artworkResponse.isSuccessful && artworkBody != null) {
-                            val rawBytes = artworkBody.bytes()
+                        if (artworkResponse.isSuccessful) {
+                            val rawBytes = artworkResponse.body.bytes()
                             val processed = MetadataHelper.processArtworkBytes(rawBytes, MetadataHelper.MAX_ARTWORK_DIMENSION)
                             if (processed != null) {
                                 scaledBitmap = processed.first
@@ -821,7 +952,7 @@ class PlaybackService : MediaSessionService() {
                             .build()
                         player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
                     }
-                    updateLegacySessionMetadata(updatedMetadata, scaledBitmap)
+                    updateLegacySessionMetadata(updatedMetadata, scaledBitmap, isTrackChange = isRealTrackChange)
                     updateNotificationLayout()
                 }
             }
