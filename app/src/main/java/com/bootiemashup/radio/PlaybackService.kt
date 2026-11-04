@@ -46,6 +46,7 @@ import androidx.media3.session.legacy.MediaDescriptionCompat
 import androidx.media3.session.legacy.MediaMetadataCompat
 import androidx.media3.session.legacy.MediaSessionCompat
 import androidx.media3.session.legacy.PlaybackStateCompat
+import com.google.android.gms.cast.framework.CastContext
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -276,9 +277,18 @@ class PlaybackService : MediaSessionService() {
         // Start Foreground Notification immediately
         updateForegroundNotification(startInForegroundRequired = true)
 
+        // If actively casting, do not auto-start local playback on service startup
+        val isCastActive = try {
+            val castContext = CastContext.getSharedInstance(applicationContext)
+            val session = castContext.sessionManager.currentCastSession
+            session != null && session.isConnected
+        } catch (_: Throwable) {
+            false
+        }
+
         acquireLocks()
         player.prepare()
-        player.playWhenReady = true
+        player.playWhenReady = !isCastActive
 
         // Register player listener for status updates
         player.addListener(object : Player.Listener {
@@ -655,7 +665,15 @@ class PlaybackService : MediaSessionService() {
         val notification = notificationBuilder.build()
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        if (isPlaying || startInForegroundRequired) {
+        val isCastActive = try {
+            val castContext = CastContext.getSharedInstance(applicationContext)
+            val session = castContext.sessionManager.currentCastSession
+            session != null && session.isConnected
+        } catch (_: Throwable) {
+            false
+        }
+
+        if (isPlaying || isCastActive || startInForegroundRequired) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)

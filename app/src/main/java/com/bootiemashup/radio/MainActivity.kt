@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.View
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -26,10 +27,18 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
-import androidx.mediarouter.media.MediaControlIntent
-import androidx.mediarouter.media.MediaRouteSelector
 import com.bumptech.glide.Glide
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata as CastMediaMetadata
+import com.google.android.gms.cast.MediaQueueItem
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.common.images.WebImage
 import com.google.common.util.concurrent.ListenableFuture
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
@@ -46,6 +55,29 @@ class MainActivity : AppCompatActivity() {
 
     private var doubleBackToExitPressedOnce = false
 
+    // Cast SDK
+    private var castContext: CastContext? = null
+    private var castSession: CastSession? = null
+    private val castSessionManagerListener = CastSessionManagerListener()
+
+    // Track whether we're currently casting so we can manage local playback
+    private var isCasting = false
+
+    // Last track title pushed to the Cast device — used to avoid redundant metadata updates
+    private var lastCastTrackTitle: String = ""
+
+    // Volume step per phone button press when casting (1% of device range per click)
+    private companion object {
+        const val CAST_VOLUME_STEP = 0.01
+
+        // "Safe" maximum to apply on first connect. If the device was blasting at
+        // 100%, we cap the initial cast volume at this level to protect hearing.
+        // The user can always raise it with the volume buttons afterwards.
+        const val CAST_SAFE_START_VOLUME = 0.20 // 20% of device range
+    }
+
+    private var volumeToast: Toast? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -59,12 +91,21 @@ class MainActivity : AppCompatActivity() {
         btnMute = findViewById(R.id.btnMute)
         mediaRouteButton = findViewById(R.id.mediaRouteButton)
 
-        // Configure MediaRouteButton for standard Bluetooth / audio routing
-        val mediaRouteSelector = MediaRouteSelector.Builder()
-            .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
-            .addControlCategory(MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
-            .build()
-        mediaRouteButton.routeSelector = mediaRouteSelector
+        // Initialize Cast SDK — CastButtonFactory wires the MediaRouteButton to the Cast SDK's
+        // route selector.
+        try {
+            castContext = CastContext.getSharedInstance(this)
+            CastButtonFactory.setUpMediaRouteButton(applicationContext, mediaRouteButton)
+        } catch (e: Exception) {
+            // Cast not available (e.g. no Google Play Services on TV) — fall back to basic audio routing
+            e.printStackTrace()
+            setupFallbackRouteSelector()
+        }
+
+        // Apply our custom CastVolumeDialogFactory which:
+        // 1) Filters out duplicate device entries in the chooser dialog
+        // 2) Provides a logarithmic volume slider curve in the controller dialog
+        mediaRouteButton.setDialogFactory(CastVolumeDialogFactory())
 
         // Setup double back press to exit
         val onBackPressedCallback = object : OnBackPressedCallback(true) {
@@ -129,6 +170,83 @@ class MainActivity : AppCompatActivity() {
             .into(ivArtwork)
     }
 
+    /**
+     * Intercept hardware volume key events.
+     *
+     * When casting, redirect physical volume key presses to adjust the Cast device
+     * volume in precise 1% increments per click.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isCasting && castSession?.isConnected == true) {
+            val keyCode = event.keyCode
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                // Only act on the DOWN action (once per physical press) to avoid double-firing
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    val session = castSession ?: return true
+                    val selectedRoute = androidx.mediarouter.media.MediaRouter.getInstance(this).selectedRoute
+                    val isFixedVolume = selectedRoute.volumeHandling == androidx.mediarouter.media.MediaRouter.RouteInfo.PLAYBACK_VOLUME_FIXED || selectedRoute.volumeMax <= 1
+
+                    if (isFixedVolume) {
+                        showCastPassthroughVolumeToast()
+                    } else {
+                        if (session.isMute) {
+                            try {
+                                session.setMute(false)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                        val currentPercent = (session.volume * 100).roundToInt()
+                        val newPercent = when (keyCode) {
+                            KeyEvent.KEYCODE_VOLUME_UP   -> (currentPercent + 1).coerceAtMost(100)
+                            KeyEvent.KEYCODE_VOLUME_DOWN -> (currentPercent - 1).coerceAtLeast(0)
+                            else -> currentPercent
+                        }
+                        val newVol = newPercent / 100.0
+                        try {
+                            session.setVolume(newVol)
+                            showCastVolumeToast(newPercent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+                // Consume both UP and DOWN actions to suppress the system volume bar
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun showCastPassthroughVolumeToast() {
+        volumeToast?.cancel()
+        val toast = Toast.makeText(this, "Audio Passthrough · Use TV / Soundbar remote", Toast.LENGTH_SHORT)
+        volumeToast = toast
+        toast.show()
+    }
+
+    /**
+     * Show a brief toast with the current Cast volume expressed as a percentage.
+     * Cancels any active toast so rapid button presses update immediately without lag.
+     */
+    private fun showCastVolumeToast(percent: Int) {
+        volumeToast?.cancel()
+        val toast = Toast.makeText(this, "Cast Volume: $percent%", Toast.LENGTH_SHORT)
+        volumeToast = toast
+        toast.show()
+    }
+
+    /**
+     * Fallback route selector used only when Cast SDK is unavailable (e.g. no Google Play Services).
+     * Uses only CATEGORY_LIVE_AUDIO (not REMOTE_PLAYBACK) to avoid showing duplicates.
+     */
+    private fun setupFallbackRouteSelector() {
+        val selector = androidx.mediarouter.media.MediaRouteSelector.Builder()
+            .addControlCategory(androidx.mediarouter.media.MediaControlIntent.CATEGORY_LIVE_AUDIO)
+            .build()
+        mediaRouteButton.routeSelector = selector
+    }
+
     override fun onStart() {
         super.onStart()
         // Start foreground service and connect to Media3 Session
@@ -141,9 +259,41 @@ class MainActivity : AppCompatActivity() {
         connectToMediaSession()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Register cast session listener so we respond to cast connect/disconnect
+        castContext?.sessionManager?.addSessionManagerListener(
+            castSessionManagerListener,
+            CastSession::class.java
+        )
+        // Sync state in case a cast session is already active (e.g. returning to app after screen-off)
+        castSession = castContext?.sessionManager?.currentCastSession
+        if (castSession?.isConnected == true) {
+            isCasting = true
+            mediaController?.pause()
+            // Force a metadata refresh on the Cast device now that the Activity is visible again.
+            // Reset lastCastTrackTitle so updateCastMetadata() sends the update even if the
+            // track title hasn't changed since we last pushed it.
+            lastCastTrackTitle = ""
+            val currentMetadata = mediaController?.playlistMetadata
+                ?: mediaController?.mediaMetadata
+            if (currentMetadata != null) {
+                updateCastMetadata(currentMetadata)
+            }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Unregister while paused — the Cast SDK keeps casting on its own
+        castContext?.sessionManager?.removeSessionManagerListener(
+            castSessionManagerListener,
+            CastSession::class.java
+        )
+    }
+
     override fun onStop() {
         super.onStop()
-        // Release MediaController connection
         releaseMediaController()
     }
 
@@ -164,6 +314,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun onMediaControllerConnected(controller: MediaController) {
         mediaController = controller
+
+        // If actively casting, ensure the local player remains paused
+        if (isCasting || castContext?.sessionManager?.currentCastSession?.isConnected == true) {
+            isCasting = true
+            controller.pause()
+        }
 
         // Listen for playback and metadata changes from session
         controller.addListener(object : Player.Listener {
@@ -212,6 +368,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePlayback() {
         val controller = mediaController ?: return
+        if (isCasting) {
+            // While casting, play/pause controls the Cast receiver via RemoteMediaClient
+            val remoteClient = castSession?.remoteMediaClient ?: return
+            if (remoteClient.isPlaying) {
+                remoteClient.pause()
+            } else {
+                remoteClient.play()
+            }
+            return
+        }
         if (controller.playWhenReady) {
             controller.pause()
         } else {
@@ -296,15 +462,243 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val artworkUri = activeMetadata.artworkUri
-        if (artworkUri != null) {
-            Glide.with(this)
-                .load(artworkUri)
-                .placeholder(ivArtwork.drawable)
-                .error(R.mipmap.ic_launcher_round)
-                .into(ivArtwork)
+        val artworkUri = activeMetadata.artworkUri ?: MetadataHelper.ARTWORK_BASE_URL.toUri()
+        Glide.with(this)
+            .load(artworkUri)
+            .placeholder(ivArtwork.drawable ?: ContextCompat.getDrawable(this, R.mipmap.ic_launcher_round))
+            .error(R.mipmap.ic_launcher_round)
+            .into(ivArtwork)
+
+        // Push updated track info to the Chromecast display (gap-free — no load() call)
+        if (isCasting) {
+            updateCastMetadata(activeMetadata)
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Cast session management
+    // -------------------------------------------------------------------------
+
+    /**
+     * Update the metadata displayed on the Chromecast receiver (track title, artist, artwork)
+     * WITHOUT interrupting audio playback.
+     *
+     * Strategy (gap-free):
+     *   - Build a new MediaQueueItem with the updated metadata but the SAME stream URL.
+     *   - Call remoteMediaClient.queueUpdateItems() — this updates the queue item's metadata
+     *     on the receiver side without tearing down or rebuffering the stream.
+     *   - For the Default Media Receiver (CC1AD845), this silently refreshes the "Now Playing"
+     *     display on the TV screen. If the receiver ignores it (some firmware versions do),
+     *     the audio continues uninterrupted — there is no fallback to load().
+     *   - Only called when the app is in the foreground (Activity resumed). When the screen is
+     *     off, the stream continues playing on the receiver; metadata updates resume the moment
+     *     the user opens the app again.
+     */
+    private fun updateCastMetadata(metadata: MediaMetadata) {
+        val session = castSession ?: return
+        val remoteClient = session.remoteMediaClient ?: return
+
+        val nowPlaying = metadata.displayTitle?.toString()
+            ?: metadata.title?.toString()
+            ?: "Bootie Mashup Radio"
+        val artist = metadata.artist?.toString() ?: "Live Stream"
+        val artworkUri = metadata.artworkUri ?: MetadataHelper.ARTWORK_BASE_URL.toUri()
+
+        // Skip redundant updates — only push when the track title actually changed
+        if (nowPlaying == lastCastTrackTitle) return
+        lastCastTrackTitle = nowPlaying
+
+        try {
+            val castMetadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
+                putString(CastMediaMetadata.KEY_TITLE, nowPlaying)
+                putString(CastMediaMetadata.KEY_ARTIST, artist)
+                putString(CastMediaMetadata.KEY_ALBUM_TITLE, "Bootie Mashup Radio")
+                putString(CastMediaMetadata.KEY_ALBUM_ARTIST, "Bootie Mashup Radio")
+                addImage(WebImage(artworkUri))
+            }
+
+            val mediaInfo = MediaInfo.Builder(PlaybackService.PRIMARY_STREAM_URL)
+                .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+                .setContentType("audio/mpeg")
+                .setMetadata(castMetadata)
+                .build()
+
+            // queueUpdateItems updates the queue entry's metadata without touching the stream.
+            // The Default Receiver will refresh its Now Playing screen on the TV immediately.
+            val currentItemId = remoteClient.mediaStatus?.currentItemId ?: return
+            val updatedItem = MediaQueueItem.Builder(mediaInfo)
+                .setItemId(currentItemId)
+                .build()
+            remoteClient.queueUpdateItems(arrayOf(updatedItem), null)
+        } catch (e: Exception) {
+            // Non-fatal: metadata display on TV may not update, but audio is unaffected
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Called when a Cast session becomes connected (user tapped a device in the picker).
+     *
+     * Volume safety:
+     *   - Read the current Cast device volume (0.0–1.0).
+     *   - If it's above our safe-start threshold (20%), cap it immediately.
+     *   - Toast tells the user what level it's been set to and that volume
+     *     buttons will now adjust the Cast device.
+     *
+     * Then pause local ExoPlayer and load the radio stream on the receiver.
+     */
+    private fun onCastSessionConnected(session: CastSession) {
+        castSession = session
+        isCasting = true
+
+        // Pause local playback — the Cast receiver takes over audio output
+        mediaController?.pause()
+
+        // --- Volume safety check ---
+        val selectedRoute = androidx.mediarouter.media.MediaRouter.getInstance(this).selectedRoute
+        val isFixedVolume = selectedRoute.volumeHandling == androidx.mediarouter.media.MediaRouter.RouteInfo.PLAYBACK_VOLUME_FIXED || selectedRoute.volumeMax <= 1
+
+        if (isFixedVolume) {
+            // Unattenuated passthrough: do not artificially cap volume on fixed HDMI/TV passthrough devices
+            Toast.makeText(
+                this,
+                "Casting to ${session.castDevice?.friendlyName}\nAudio Passthrough (Use TV / Soundbar remote for volume)",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            val deviceVol = session.volume         // current Cast device volume, 0.0–1.0
+            val startVol: Double
+            if (deviceVol > CAST_SAFE_START_VOLUME) {
+                startVol = CAST_SAFE_START_VOLUME
+                try {
+                    session.setVolume(startVol)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                val previousPct = (deviceVol * 100).roundToInt()
+                val safePct     = (startVol  * 100).roundToInt()
+                Toast.makeText(
+                    this,
+                    "🔊 Cast volume reduced to $safePct% (was $previousPct%).\nUse volume buttons to adjust.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                startVol = deviceVol
+                val pct = (startVol * 100).roundToInt()
+                Toast.makeText(
+                    this,
+                    "Casting to ${session.castDevice?.friendlyName} · Volume: $pct%\nUse volume buttons to adjust.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        // Retrieve the current now playing metadata so the TV displays real info from startup
+        val activeMetadata = mediaController?.playlistMetadata
+            ?: mediaController?.mediaMetadata
+
+        val title = activeMetadata?.title?.toString()
+            ?: activeMetadata?.displayTitle?.toString()
+            ?: "Bootie Mashup Radio"
+        val artist = activeMetadata?.artist?.toString() ?: "Live Stream"
+        val artworkUri = activeMetadata?.artworkUri ?: MetadataHelper.ARTWORK_BASE_URL.toUri()
+
+        // Build a Cast MediaInfo with the current track title, artist, and album artwork
+        val castMetadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
+            putString(CastMediaMetadata.KEY_TITLE, title)
+            putString(CastMediaMetadata.KEY_ARTIST, artist)
+            putString(CastMediaMetadata.KEY_ALBUM_TITLE, "Bootie Mashup Radio")
+            putString(CastMediaMetadata.KEY_ALBUM_ARTIST, "Bootie Mashup Radio")
+            addImage(WebImage(artworkUri))
+        }
+
+        val mediaInfo = MediaInfo.Builder(PlaybackService.PRIMARY_STREAM_URL)
+            .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+            .setContentType("audio/mpeg")
+            .setMetadata(castMetadata)
+            .build()
+
+        val loadRequest = MediaLoadRequestData.Builder()
+            .setMediaInfo(mediaInfo)
+            .setAutoplay(true)
+            .build()
+
+        session.remoteMediaClient?.load(loadRequest)
+    }
+
+    /**
+     * Called when a Cast session ends (user pressed "Stop casting" or connection dropped).
+     * Resume local ExoPlayer playback.
+     */
+    private fun onCastSessionEnded() {
+        castSession = null
+        isCasting = false
+        // Reset so the next Cast connection will immediately push fresh metadata
+        lastCastTrackTitle = ""
+
+        // Resume local playback
+        val controller = mediaController
+        if (controller != null) {
+            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
+                controller.prepare()
+            }
+            controller.play()
+
+            // Ensure artwork and track metadata are immediately re-displayed on the phone UI
+            val currentMetadata = controller.playlistMetadata
+            val currentTitle = currentMetadata.title?.toString() ?: currentMetadata.displayTitle?.toString()
+            if (!currentTitle.isNullOrBlank()) {
+                updateTrackMetadataUI(currentMetadata)
+            } else {
+                updateTrackMetadataUI(controller.mediaMetadata)
+            }
+        }
+
+        Toast.makeText(this, "Cast ended — resuming on phone", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * SessionManagerListener for Cast session lifecycle events.
+     */
+    private inner class CastSessionManagerListener : SessionManagerListener<CastSession> {
+
+        override fun onSessionStarted(session: CastSession, sessionId: String) {
+            onCastSessionConnected(session)
+        }
+
+        override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            castSession = session
+            isCasting = true
+            mediaController?.pause()
+            // Do not re-load the stream on session resume — the receiver is already streaming seamlessly.
+            // Push a fresh metadata update so the TV display is in sync after a network hiccup / suspend.
+            lastCastTrackTitle = ""
+            val currentMetadata = mediaController?.playlistMetadata
+                ?: mediaController?.mediaMetadata
+            if (currentMetadata != null) {
+                updateCastMetadata(currentMetadata)
+            }
+        }
+
+        override fun onSessionEnded(session: CastSession, error: Int) {
+            onCastSessionEnded()
+        }
+
+        override fun onSessionSuspended(session: CastSession, reason: Int) {
+            // Temporarily suspended (e.g. network hiccup) — leave isCasting true,
+            // the session will be resumed automatically by the Cast SDK.
+        }
+
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionStartFailed(session: CastSession, error: Int) {
+            Toast.makeText(this@MainActivity, "Cast failed to start", Toast.LENGTH_SHORT).show()
+        }
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionResuming(session: CastSession, sessionId: String) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+    }
+
+    // -------------------------------------------------------------------------
 
     private fun checkBatteryOptimization() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
