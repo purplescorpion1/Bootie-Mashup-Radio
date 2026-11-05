@@ -713,6 +713,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun killAudioAndExit() {
+        // End any active Chromecast session
+        try {
+            castContext?.sessionManager?.endCurrentSession(true)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Disconnect controller
         mediaController?.let {
             it.stop()

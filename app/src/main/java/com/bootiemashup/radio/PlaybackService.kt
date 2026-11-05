@@ -393,7 +393,16 @@ class PlaybackService : MediaSessionService() {
     private fun killService() {
         stopRetryLoop()
         releaseLocks()
+        try {
+            val castContext = CastContext.getSharedInstance(applicationContext)
+            castContext.sessionManager.endCurrentSession(true)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         player.stop()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        manager?.cancel(NOTIFICATION_ID)
         stopSelf()
     }
 
