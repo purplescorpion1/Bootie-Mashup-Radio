@@ -271,15 +271,6 @@ class MainActivity : AppCompatActivity() {
         if (castSession?.isConnected == true) {
             isCasting = true
             mediaController?.pause()
-            // Force a metadata refresh on the Cast device now that the Activity is visible again.
-            // Reset lastCastTrackTitle so updateCastMetadata() sends the update even if the
-            // track title hasn't changed since we last pushed it.
-            lastCastTrackTitle = ""
-            val currentMetadata = mediaController?.playlistMetadata
-                ?: mediaController?.mediaMetadata
-            if (currentMetadata != null) {
-                updateCastMetadata(currentMetadata)
-            }
         }
     }
 
@@ -324,11 +315,17 @@ class MainActivity : AppCompatActivity() {
         // Listen for playback and metadata changes from session
         controller.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isCasting || castContext?.sessionManager?.currentCastSession?.isConnected == true) {
+                    controller.pause()
+                }
                 updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                updatePlayPauseUI(playWhenReady)
+                if (playWhenReady && (isCasting || castContext?.sessionManager?.currentCastSession?.isConnected == true)) {
+                    controller.pause()
+                }
+                updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -469,10 +466,14 @@ class MainActivity : AppCompatActivity() {
             .error(R.mipmap.ic_launcher_round)
             .into(ivArtwork)
 
-        // Push updated track info to the Chromecast display (gap-free — no load() call)
+        // Push updated track info to the Chromecast display (soft load of same URL)
         if (isCasting) {
             updateCastMetadata(activeMetadata)
         }
+    }
+
+    private fun isCastSessionActive(): Boolean {
+        return isCasting || (castSession?.isConnected == true) || (castContext?.sessionManager?.currentCastSession?.isConnected == true)
     }
 
     // -------------------------------------------------------------------------
@@ -480,19 +481,11 @@ class MainActivity : AppCompatActivity() {
     // -------------------------------------------------------------------------
 
     /**
-     * Update the metadata displayed on the Chromecast receiver (track title, artist, artwork)
-     * WITHOUT interrupting audio playback.
+     * Update Chromecast Now Playing using the Default Media Receiver.
      *
-     * Strategy (gap-free):
-     *   - Build a new MediaQueueItem with the updated metadata but the SAME stream URL.
-     *   - Call remoteMediaClient.queueUpdateItems() — this updates the queue item's metadata
-     *     on the receiver side without tearing down or rebuffering the stream.
-     *   - For the Default Media Receiver (CC1AD845), this silently refreshes the "Now Playing"
-     *     display on the TV screen. If the receiver ignores it (some firmware versions do),
-     *     the audio continues uninterrupted — there is no fallback to load().
-     *   - Only called when the app is in the foreground (Activity resumed). When the screen is
-     *     off, the stream continues playing on the receiver; metadata updates resume the moment
-     *     the user opens the app again.
+     * Soft-reloads the same live stream URL with fresh metadata so the TV display
+     * actually updates. May cause a brief rebuffer on some networks/devices.
+     * PlaybackService also calls the same path when the screen is off.
      */
     private fun updateCastMetadata(metadata: MediaMetadata) {
         val session = castSession ?: return
@@ -523,15 +516,14 @@ class MainActivity : AppCompatActivity() {
                 .setMetadata(castMetadata)
                 .build()
 
-            // queueUpdateItems updates the queue entry's metadata without touching the stream.
-            // The Default Receiver will refresh its Now Playing screen on the TV immediately.
-            val currentItemId = remoteClient.mediaStatus?.currentItemId ?: return
-            val updatedItem = MediaQueueItem.Builder(mediaInfo)
-                .setItemId(currentItemId)
+            val loadRequest = MediaLoadRequestData.Builder()
+                .setMediaInfo(mediaInfo)
+                .setAutoplay(true)
                 .build()
-            remoteClient.queueUpdateItems(arrayOf(updatedItem), null)
+
+            remoteClient.load(loadRequest)
         } catch (e: Exception) {
-            // Non-fatal: metadata display on TV may not update, but audio is unaffected
+            // Non-fatal: metadata display on TV may not update, but we avoid crashing
             e.printStackTrace()
         }
     }
@@ -636,12 +628,12 @@ class MainActivity : AppCompatActivity() {
         // Reset so the next Cast connection will immediately push fresh metadata
         lastCastTrackTitle = ""
 
-        // Resume local playback
+        // Resume local playback from live edge
         val controller = mediaController
         if (controller != null) {
-            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
-                controller.prepare()
-            }
+            // Seek to default live edge position and play
+            controller.stop()
+            controller.prepare()
             controller.play()
 
             // Ensure artwork and track metadata are immediately re-displayed on the phone UI
@@ -670,14 +662,6 @@ class MainActivity : AppCompatActivity() {
             castSession = session
             isCasting = true
             mediaController?.pause()
-            // Do not re-load the stream on session resume — the receiver is already streaming seamlessly.
-            // Push a fresh metadata update so the TV display is in sync after a network hiccup / suspend.
-            lastCastTrackTitle = ""
-            val currentMetadata = mediaController?.playlistMetadata
-                ?: mediaController?.mediaMetadata
-            if (currentMetadata != null) {
-                updateCastMetadata(currentMetadata)
-            }
         }
 
         override fun onSessionEnded(session: CastSession, error: Int) {
@@ -720,6 +704,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun killAudioAndExit() {
+        // End any active Chromecast session
+        try {
+            castContext?.sessionManager?.endCurrentSession(true)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Disconnect controller
         mediaController?.let {
             it.stop()
