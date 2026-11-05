@@ -1056,13 +1056,8 @@ class PlaybackService : MediaSessionService() {
                 override fun onSessionEnded(session: CastSession, error: Int) {
                     isCastingActive = false
                     lastCastTrackTitle = ""
-                    // Automatically resume local playback on phone when Cast session disconnects
-                    if (!player.playWhenReady) {
-                        if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
-                            player.prepare()
-                        }
-                        player.play()
-                    }
+                    // Force ExoPlayer to reconnect directly to the live stream edge rather than playing stale buffered audio
+                    resumeLocalPlaybackFromLive()
                     updateForegroundNotification(startInForegroundRequired = true)
                 }
 
@@ -1088,6 +1083,23 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    fun resumeLocalPlaybackFromLive() {
+        try {
+            player.stop()
+            val activeMetadata = currentPolledMetadata ?: player.playlistMetadata
+            val item = MediaItem.Builder()
+                .setUri(currentStreamUrl)
+                .setMediaId("bootie_mashup_stream")
+                .setMediaMetadata(activeMetadata)
+                .build()
+            player.setMediaItem(item)
+            player.prepare()
+            player.play()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun updateCastMetadata(metadata: MediaMetadata) {
         try {
             val castContext = CastContext.getSharedInstance(applicationContext)
@@ -1109,6 +1121,7 @@ class PlaybackService : MediaSessionService() {
                 putString(CastMediaMetadata.KEY_ARTIST, artist)
                 putString(CastMediaMetadata.KEY_ALBUM_TITLE, "Bootie Mashup Radio")
                 putString(CastMediaMetadata.KEY_ALBUM_ARTIST, "Bootie Mashup Radio")
+                putInt(CastMediaMetadata.KEY_TRACK_NUMBER, trackSequenceNumber.toInt())
                 addImage(WebImage(artworkUri))
             }
 

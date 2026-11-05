@@ -637,12 +637,12 @@ class MainActivity : AppCompatActivity() {
         // Reset so the next Cast connection will immediately push fresh metadata
         lastCastTrackTitle = ""
 
-        // Resume local playback
+        // Resume local playback from live edge
         val controller = mediaController
         if (controller != null) {
-            if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) {
-                controller.prepare()
-            }
+            // Seek to default live edge position and play
+            controller.stop()
+            controller.prepare()
             controller.play()
 
             // Ensure artwork and track metadata are immediately re-displayed on the phone UI
