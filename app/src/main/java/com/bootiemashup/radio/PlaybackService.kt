@@ -46,7 +46,13 @@ import androidx.media3.session.legacy.MediaDescriptionCompat
 import androidx.media3.session.legacy.MediaMetadataCompat
 import androidx.media3.session.legacy.MediaSessionCompat
 import androidx.media3.session.legacy.PlaybackStateCompat
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaMetadata as CastMediaMetadata
+import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.common.images.WebImage
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -84,6 +90,10 @@ class PlaybackService : MediaSessionService() {
     private var currentStreamUrl: String = PRIMARY_STREAM_URL
     private var retryJob: Job? = null
     private var isRetrying = false
+
+    private var isCastingActive = false
+    private var lastCastTrackTitle: String = ""
+    private var castSessionListener: SessionManagerListener<CastSession>? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -139,6 +149,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        const val RETRY_INTERVAL_SECONDS = 2L
         const val PRIMARY_STREAM_URL = "https://c7.radioboss.fm:18205/stream"
         const val FALLBACK_STREAM_URL = "https://c7.radioboss.fm/stream/205"
 
@@ -277,15 +288,11 @@ class PlaybackService : MediaSessionService() {
         // Start Foreground Notification immediately
         updateForegroundNotification(startInForegroundRequired = true)
 
-        // If actively casting, do not auto-start local playback on service startup
-        val isCastActive = try {
-            val castContext = CastContext.getSharedInstance(applicationContext)
-            val session = castContext.sessionManager.currentCastSession
-            session != null && session.isConnected
-        } catch (_: Throwable) {
-            false
-        }
+        // Setup Cast session tracking directly in PlaybackService so background service
+        // keeps track of active casting when screen is off and MainActivity is paused/destroyed
+        setupCastSessionTracking()
 
+        val isCastActive = isCastingActive
         acquireLocks()
         player.prepare()
         player.playWhenReady = !isCastActive
@@ -315,8 +322,15 @@ class PlaybackService : MediaSessionService() {
                 if (playbackState == Player.STATE_READY) {
                     stopRetryLoop()
                     syncLegacyPlaybackState(player.playWhenReady)
+                } else if (playbackState == Player.STATE_BUFFERING) {
+                    // Keep Bluetooth connection alive during network buffering
+                    if (player.playWhenReady) {
+                        syncLegacyPlaybackState(isPlaying = true, isBuffering = true)
+                    }
                 } else if (playbackState == Player.STATE_ENDED) {
                     if (player.playWhenReady) {
+                        // Keep Bluetooth connected in buffering state while reconnecting
+                        syncLegacyPlaybackState(isPlaying = true, isBuffering = true)
                         startRetryLoop()
                     }
                 }
@@ -325,6 +339,8 @@ class PlaybackService : MediaSessionService() {
             override fun onPlayerError(error: PlaybackException) {
                 super.onPlayerError(error)
                 if (player.playWhenReady) {
+                    // Keep Bluetooth connected in buffering state while reconnecting
+                    syncLegacyPlaybackState(isPlaying = true, isBuffering = true)
                     startRetryLoop()
                 }
             }
@@ -547,11 +563,17 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun syncLegacyPlaybackState(isPlaying: Boolean) {
+    private fun syncLegacyPlaybackState(isPlaying: Boolean, isBuffering: Boolean = false) {
         try {
             val sessionCompat = getSessionCompat() ?: return
-            val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-            val speed = if (isPlaying) 1.0f else 0.0f
+            // If the user intends to play (isPlaying == true), but we are buffering or retrying,
+            // report STATE_BUFFERING so Bluetooth car systems do not think playback stopped or disconnect.
+            val state = when {
+                !isPlaying -> PlaybackStateCompat.STATE_PAUSED
+                isBuffering || isRetrying -> PlaybackStateCompat.STATE_BUFFERING
+                else -> PlaybackStateCompat.STATE_PLAYING
+            }
+            val speed = if (state == PlaybackStateCompat.STATE_PLAYING) 1.0f else 0.0f
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(state, 0L, speed, SystemClock.elapsedRealtime())
                 .setActions(
@@ -665,7 +687,7 @@ class PlaybackService : MediaSessionService() {
         val notification = notificationBuilder.build()
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val isCastActive = try {
+        val isCastActive = isCastingActive || try {
             val castContext = CastContext.getSharedInstance(applicationContext)
             val session = castContext.sessionManager.currentCastSession
             session != null && session.isConnected
@@ -808,10 +830,12 @@ class PlaybackService : MediaSessionService() {
     private fun startRetryLoop() {
         if (isRetrying) return
         isRetrying = true
+        // Keep Bluetooth audio connection alive by signaling STATE_BUFFERING
+        syncLegacyPlaybackState(isPlaying = true, isBuffering = true)
         retryJob?.cancel()
         retryJob = CoroutineScope(Dispatchers.Main).launch {
             while (isActive && isRetrying && player.playWhenReady) {
-                delay(5.seconds)
+                delay(RETRY_INTERVAL_SECONDS.seconds)
                 if (!isRetrying || !player.playWhenReady) break
                 // Retry connecting to the session's stream from live
                 try {
@@ -959,19 +983,18 @@ class PlaybackService : MediaSessionService() {
                 }
 
                 withContext(Dispatchers.Main) {
-                    // Updating playlistMetadata, currentMediaItem, and legacy sessionCompat ensures
+                    // Updating playlistMetadata and legacy sessionCompat ensures
                     // that Mobile Lock Screen, Android TV Leanback launcher card, and Bluetooth
                     // AVRCP (smartwatch/car) immediately show the correct track title, artist,
                     // album, and album artwork without interrupting live stream playback!
                     player.playlistMetadata = updatedMetadata
-                    player.currentMediaItem?.let { currentItem ->
-                        val updatedItem = currentItem.buildUpon()
-                            .setMediaMetadata(updatedMetadata)
-                            .build()
-                        player.replaceMediaItem(player.currentMediaItemIndex, updatedItem)
-                    }
                     updateLegacySessionMetadata(updatedMetadata, scaledBitmap, isTrackChange = isRealTrackChange)
                     updateNotificationLayout()
+
+                    // If casting is active, update Cast receiver display even if screen is off
+                    if (isCastingActive) {
+                        updateCastMetadata(updatedMetadata)
+                    }
                 }
             }
         }
@@ -985,6 +1008,14 @@ class PlaybackService : MediaSessionService() {
         pollingJob?.cancel()
         stopRetryLoop()
         releaseLocks()
+        castSessionListener?.let { listener ->
+            try {
+                val castContext = CastContext.getSharedInstance(applicationContext)
+                castContext.sessionManager.removeSessionManagerListener(listener, CastSession::class.java)
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+        }
         player.release()
         mediaSession?.run {
             release()
@@ -992,6 +1023,109 @@ class PlaybackService : MediaSessionService() {
         }
         showToast("Audio Stopped")
         super.onDestroy()
+    }
+
+    private fun setupCastSessionTracking() {
+        try {
+            val castContext = CastContext.getSharedInstance(applicationContext)
+            val currentSession = castContext.sessionManager.currentCastSession
+            isCastingActive = (currentSession != null && currentSession.isConnected)
+
+            castSessionListener = object : SessionManagerListener<CastSession> {
+                override fun onSessionStarted(session: CastSession, sessionId: String) {
+                    isCastingActive = true
+                    lastCastTrackTitle = ""
+                    // Ensure local playback is paused when casting starts
+                    if (player.playWhenReady) {
+                        player.pause()
+                    }
+                    currentPolledMetadata?.let { updateCastMetadata(it) }
+                    updateForegroundNotification(startInForegroundRequired = true)
+                }
+
+                override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+                    isCastingActive = true
+                    lastCastTrackTitle = ""
+                    if (player.playWhenReady) {
+                        player.pause()
+                    }
+                    currentPolledMetadata?.let { updateCastMetadata(it) }
+                    updateForegroundNotification(startInForegroundRequired = true)
+                }
+
+                override fun onSessionEnded(session: CastSession, error: Int) {
+                    isCastingActive = false
+                    lastCastTrackTitle = ""
+                    // Automatically resume local playback on phone when Cast session disconnects
+                    if (!player.playWhenReady) {
+                        if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) {
+                            player.prepare()
+                        }
+                        player.play()
+                    }
+                    updateForegroundNotification(startInForegroundRequired = true)
+                }
+
+                override fun onSessionSuspended(session: CastSession, reason: Int) {
+                    // Temporarily suspended: remain in casting mode
+                }
+
+                override fun onSessionStarting(session: CastSession) {}
+                override fun onSessionStartFailed(session: CastSession, error: Int) {
+                    isCastingActive = false
+                }
+                override fun onSessionEnding(session: CastSession) {}
+                override fun onSessionResuming(session: CastSession, sessionId: String) {}
+                override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+            }
+
+            castContext.sessionManager.addSessionManagerListener(
+                castSessionListener as SessionManagerListener<CastSession>,
+                CastSession::class.java
+            )
+        } catch (e: Throwable) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun updateCastMetadata(metadata: MediaMetadata) {
+        try {
+            val castContext = CastContext.getSharedInstance(applicationContext)
+            val session = castContext.sessionManager.currentCastSession ?: return
+            if (!session.isConnected) return
+            val remoteClient = session.remoteMediaClient ?: return
+
+            val nowPlaying = metadata.displayTitle?.toString()
+                ?: metadata.title?.toString()
+                ?: "Bootie Mashup Radio"
+            val artist = metadata.artist?.toString() ?: "Live Stream"
+            val artworkUri = metadata.artworkUri ?: MetadataHelper.ARTWORK_BASE_URL.toUri()
+
+            if (nowPlaying == lastCastTrackTitle) return
+            lastCastTrackTitle = nowPlaying
+
+            val castMetadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
+                putString(CastMediaMetadata.KEY_TITLE, nowPlaying)
+                putString(CastMediaMetadata.KEY_ARTIST, artist)
+                putString(CastMediaMetadata.KEY_ALBUM_TITLE, "Bootie Mashup Radio")
+                putString(CastMediaMetadata.KEY_ALBUM_ARTIST, "Bootie Mashup Radio")
+                addImage(WebImage(artworkUri))
+            }
+
+            val mediaInfo = MediaInfo.Builder(PRIMARY_STREAM_URL)
+                .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+                .setContentType("audio/mpeg")
+                .setMetadata(castMetadata)
+                .build()
+
+            val currentItemId = remoteClient.mediaStatus?.currentItemId ?: return
+            val updatedItem = MediaQueueItem.Builder(mediaInfo)
+                .setItemId(currentItemId)
+                .build()
+            remoteClient.queueUpdateItems(arrayOf(updatedItem), null)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private inner class CustomCallback : MediaSession.Callback {

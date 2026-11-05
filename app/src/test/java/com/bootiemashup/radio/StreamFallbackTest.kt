@@ -9,6 +9,7 @@ class StreamFallbackTest {
 
     @Test
     fun testStreamConstants() {
+        assertEquals(2L, PlaybackService.RETRY_INTERVAL_SECONDS)
         assertEquals("https://c7.radioboss.fm:18205/stream", PlaybackService.PRIMARY_STREAM_URL)
         assertEquals("https://c7.radioboss.fm/stream/205", PlaybackService.FALLBACK_STREAM_URL)
     }

@@ -271,15 +271,6 @@ class MainActivity : AppCompatActivity() {
         if (castSession?.isConnected == true) {
             isCasting = true
             mediaController?.pause()
-            // Force a metadata refresh on the Cast device now that the Activity is visible again.
-            // Reset lastCastTrackTitle so updateCastMetadata() sends the update even if the
-            // track title hasn't changed since we last pushed it.
-            lastCastTrackTitle = ""
-            val currentMetadata = mediaController?.playlistMetadata
-                ?: mediaController?.mediaMetadata
-            if (currentMetadata != null) {
-                updateCastMetadata(currentMetadata)
-            }
         }
     }
 
@@ -324,11 +315,17 @@ class MainActivity : AppCompatActivity() {
         // Listen for playback and metadata changes from session
         controller.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isCasting || castContext?.sessionManager?.currentCastSession?.isConnected == true) {
+                    controller.pause()
+                }
                 updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                updatePlayPauseUI(playWhenReady)
+                if (playWhenReady && (isCasting || castContext?.sessionManager?.currentCastSession?.isConnected == true)) {
+                    controller.pause()
+                }
+                updatePlayPauseUI(controller.playWhenReady)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -473,6 +470,10 @@ class MainActivity : AppCompatActivity() {
         if (isCasting) {
             updateCastMetadata(activeMetadata)
         }
+    }
+
+    private fun isCastSessionActive(): Boolean {
+        return isCasting || (castSession?.isConnected == true) || (castContext?.sessionManager?.currentCastSession?.isConnected == true)
     }
 
     // -------------------------------------------------------------------------
@@ -670,14 +671,6 @@ class MainActivity : AppCompatActivity() {
             castSession = session
             isCasting = true
             mediaController?.pause()
-            // Do not re-load the stream on session resume — the receiver is already streaming seamlessly.
-            // Push a fresh metadata update so the TV display is in sync after a network hiccup / suspend.
-            lastCastTrackTitle = ""
-            val currentMetadata = mediaController?.playlistMetadata
-                ?: mediaController?.mediaMetadata
-            if (currentMetadata != null) {
-                updateCastMetadata(currentMetadata)
-            }
         }
 
         override fun onSessionEnded(session: CastSession, error: Int) {
